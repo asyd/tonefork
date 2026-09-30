@@ -30,8 +30,12 @@ digraph audio_path {
     xhci [label="USB host controller (xHCI)", fillcolor="#ffffff"];
   }
 
+  // One physical cable: audio and MIDI travel together and are separated inside the DAC.
+  cable [label="ONE USB cable\n(audio + MIDI share it)", shape=box, style="filled", fillcolor="#e8e8e8", color="#444444", penwidth=2];
+
   subgraph cluster_dac {
     label="RME ADI-2 DAC"; style="rounded,filled"; fillcolor="#f3eefc"; color="#a48bd6";
+    usbif [label="USB interface\n(one device, two functions)", fillcolor="#ffffff"];
     usbrx [label="USB audio class 2 receiver\n(async endpoint + feedback)", fillcolor="#ffffff"];
     dsp [label="Digital processing\nvolume · Parametric EQ · Bass/Treble\nLoudness · Crossfeed · DA filter\n(the settings rmediy-rs changes)", fillcolor="#ffe9b3", color="#d9a441"];
     dac [label="D/A converter", fillcolor="#ffffff"];
@@ -48,7 +52,9 @@ digraph audio_path {
   graph_ -> sink;
   sink -> sndusb [label="libasound"];
   sndusb -> xhci;
-  xhci -> usbrx [label="USB cable (audio)"];
+  xhci -> cable [penwidth=3, color="#444444", dir=both];
+  cable -> usbif [penwidth=3, color="#444444", dir=both];
+  usbif -> usbrx [label="audio"];
   usbrx -> dsp -> dac -> analog -> spk;
 
   // Alternative ALSA path
@@ -61,6 +67,6 @@ digraph audio_path {
   rmediy -> midir [color="#d9a441"];
   midir -> usbmidi [color="#d9a441"];
   usbmidi -> xhci [color="#d9a441"];
-  xhci -> midirx [color="#d9a441", label="USB cable (MIDI)"];
+  usbif -> midirx [color="#d9a441", label="MIDI"];
   midirx -> dsp [color="#d9a441", label="SysEx: set / status", dir=both];
 }

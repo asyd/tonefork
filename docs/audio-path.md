@@ -14,12 +14,12 @@ flowchart TD
     P --> G[PipeWire graph<br/>mix · resample · sink volume]
     G --> S[ALSA sink node<br/>front:4]
     S -->|libasound| K[ALSA core + snd-usb-audio<br/>S32_LE · 2 ch · 48 kHz]
-    K --> U[USB · audio class 2]
+    K --> U["ONE USB cable<br/>(audio + MIDI)"]
     U --> D[ADI-2 DAC<br/>volume · EQ · Bass/Treble · filter]
     D --> A[D/A converter + analog stage]
     A --> O[Speakers / headphones]
 
-    R[rmediy-rs] -. "SysEx over MIDI (same USB cable)" .-> D
+    R[rmediy-rs] -. "SysEx over MIDI" .-> U
     T2[tonefork --host alsa] -. "libasound · 'pulse' plugin" .-> P
 ```
 
@@ -33,7 +33,7 @@ flowchart TD
 | **PipeWire** | The sound server: mixes the streams of all applications, resamples them to the device's rate, applies the **sink volume**. |
 | **ALSA sink node** | PipeWire's output to the hardware. It opens the ALSA device (`front:4` here) through `libasound`. |
 | **Kernel: ALSA core + `snd-usb-audio`** | The driver. Exposes the DAC as a sound card, with a memory-mapped ring buffer (here 512-frame periods, 32768-frame buffer). |
-| **USB (audio class 2)** | Isochronous audio transfers; the DAC's clock drives the rate (asynchronous mode with a feedback endpoint). |
+| **USB (one cable)** | A single physical cable carries both the audio (USB audio class 2: isochronous transfers, the DAC's clock drives the rate through a feedback endpoint) and the MIDI. The DAC separates them internally. |
 | **ADI-2 DAC** | Receives the stream, applies its **own** processing (volume, parametric EQ, Bass/Treble, loudness, crossfeed, filter), converts to analog. |
 
 ## Two paths to keep in mind
