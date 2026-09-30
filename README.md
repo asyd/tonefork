@@ -39,7 +39,7 @@ Requirements: Rust 1.85+, and on Debian/Ubuntu `libasound2-dev` and `pkg-config`
 | `tonefork noise` | Pink noise. Sounds "flat", so any boost or cut is easy to notice: best for the overall tonal balance. |
 | `tonefork band 85` | An octave-wide band of noise around 85 Hz. Easier to judge than a sine. |
 | `tonefork tone 1000` | A continuous sine. |
-| `tonefork sweep` | A logarithmic sweep from 20 Hz to 20 kHz, repeated. |
+| `tonefork sweep` | A logarithmic sweep, 20 Hz to 20 kHz by default (`--from`, `--to`), repeated. |
 | `tonefork steps` | Walks through the ten octave bands (31.5 Hz to 16 kHz), 4 s each, printing the frequency. |
 | `tonefork list` | Lists the output devices. |
 
@@ -55,6 +55,9 @@ Every mode is scaled to the same **RMS** level, so switching between them does n
 | `--noise` | `steps` with band noise instead of sine tones. |
 | `--device <text>` | Output device whose name contains `<text>`. Default: the session's default sink. |
 | `--host <alsa\|pulse>` | Audio backend. Default: PipeWire/PulseAudio when available, else ALSA. |
+| `--from <Hz>`, `--to <Hz>` | Range of `sweep` (default 20 to 20000). |
+| `--preset <name>` | `voice` (with `steps`) or `crossover` (with `sweep`), see below. |
+| `--buffer-ms <ms>` | Audio buffer, default 200. Smaller: the printed frequencies and Ctrl-C follow the sound more closely. Larger: safer on a busy machine. |
 | `--rate <Hz>` | Request a sample rate for the stream. |
 | `--force-clock` | With `--rate`: set PipeWire's clock to that rate while playing, then restore it. |
 
@@ -76,6 +79,16 @@ tonefork --preset voice steps
 Plays octave-wide bands of noise at 125, 250, 500, 1000, 2000, 3000, 4000 and 6000 Hz, 5 s each, printing what each region tends to reveal (chest, warmth, "honky", vowels, presence, intelligibility, edge, sibilance). Use it to put a name on the region you are adjusting: a voice that "lacks mids" usually means roughly 300 Hz to 4 kHz.
 
 To judge an EQ change on real material, compare at **equal loudness** (a boost makes things louder, and louder sounds better), with small gains (+2 to +3 dB). Speech (a podcast, a radio recording) is a cleaner test than a mixed song, because an EQ acts on the whole mix and cannot isolate one voice.
+
+## Checking a subwoofer / speaker handover
+
+```sh
+tonefork --preset crossover sweep
+```
+
+A sine sweep from 50 to 150 Hz over 20 s, repeated, printing the frequency every 5 Hz and marking the usual landmarks of an active subwoofer (the ADAM Sub8's Frequency knob range, its 85 Hz satellite filter). Listen for a dip or a bump around the handover; try the subwoofer's **Phase** switch (0° / 180°) and its Frequency knob, and keep the setting where the bass is the most even.
+
+Be realistic about what this shows: in a room, the bass modes create peaks and dips of their own in this very range, so a sweep reveals the room at least as much as the crossover. Compare settings of the *same* sweep (phase 0° vs 180°, filter on vs off) rather than judging one sweep in isolation. See [docs/audio-path.md](docs/audio-path.md) for how a subwoofer sits in the chain.
 
 ## Sample rate
 

@@ -17,8 +17,9 @@ pub enum Kind {
     Pink,
     /// Octave-wide band of pink noise around the frequency.
     Band(f32),
-    /// Logarithmic sweep 20 Hz -> 20 kHz over the given number of seconds, repeated.
-    Sweep(f32),
+    /// Logarithmic sweep from `from` to `to` (Hz) over `secs` seconds, repeated.
+    /// While playing, `Signal::position` holds the current frequency in Hz.
+    Sweep { secs: f32, from: f32, to: f32 },
     /// Steps through the frequencies, `secs` each; sine or band noise.
     Steps { freqs: Vec<f32>, secs: f32, noise: bool },
 }
@@ -119,7 +120,7 @@ enum Engine {
     Sine { freq: f32, phase: f32 },
     Pink { pink: Pink, gain: f32 },
     Band(BandNoise),
-    Sweep { phase: f32, pos: f32, secs: f32 },
+    Sweep { phase: f32, pos: f32, secs: f32, from: f32, to: f32 },
     Steps { freqs: Vec<f32>, noises: Vec<BandNoise>, noise: bool, idx: usize, n: usize, seg: usize, phase: f32 },
 }
 
@@ -150,7 +151,7 @@ impl Signal {
                 Engine::Pink { pink: Pink::new(7), gain: 1.0 / rms.max(1e-6) }
             }
             Kind::Band(f) => Engine::Band(BandNoise::new(f, sr, 11)),
-            Kind::Sweep(secs) => Engine::Sweep { phase: 0.0, pos: 0.0, secs },
+            Kind::Sweep { secs, from, to } => Engine::Sweep { phase: 0.0, pos: 0.0, secs, from, to },
             Kind::Steps { freqs, secs, noise } => {
                 let noises = if noise { freqs.iter().enumerate().map(|(i, &f)| BandNoise::new(f, sr, 100 + i as u32)).collect() } else { vec![] };
                 Engine::Steps { freqs, noises, noise, idx: 0, n: 0, seg: (secs * sr) as usize, phase: 0.0 }
@@ -179,8 +180,9 @@ impl Signal {
             }
             Engine::Pink { pink, gain } => pink.next() * *gain * level,
             Engine::Band(b) => b.next() * level,
-            Engine::Sweep { phase, pos, secs } => {
-                let f = 20.0 * (20000.0f32 / 20.0).powf(*pos / *secs);
+            Engine::Sweep { phase, pos, secs, from, to } => {
+                let f = *from * (*to / *from).powf(*pos / *secs);
+                self.position.store(f as usize, Ordering::Relaxed);
                 *phase = (*phase + TAU * f / sr) % TAU;
                 *pos += 1.0 / sr;
                 if *pos >= *secs {
@@ -290,7 +292,7 @@ mod tests {
 
     #[test]
     fn never_clips_and_fades_in() {
-        let (mut s, ..) = signal(Kind::Sweep(2.0), -12.0);
+        let (mut s, ..) = signal(Kind::Sweep { secs: 2.0, from: 20.0, to: 20000.0 }, -12.0);
         let first = s.next().abs();
         assert!(first < 0.001, "starts at silence, got {first}");
         assert!((0..(SR * 5.0) as usize).all(|_| s.next().abs() <= 1.0));
@@ -304,6 +306,19 @@ mod tests {
         skip(&mut s, 0.5);
         assert!(done.load(Ordering::Relaxed));
         assert_eq!(s.next(), 0.0);
+    }
+
+    #[test]
+    fn sweep_stays_in_its_range_and_reports_the_frequency() {
+        let (mut s, ..) = signal(Kind::Sweep { secs: 4.0, from: 50.0, to: 150.0 }, -30.0);
+        let mut seen = (usize::MAX, 0usize);
+        for _ in 0..(SR * 4.0) as usize - 1 {
+            s.next();
+            let f = s.position.load(Ordering::Relaxed);
+            seen = (seen.0.min(f), seen.1.max(f));
+        }
+        assert!(seen.0 >= 50 && seen.1 <= 150, "{seen:?}");
+        assert!(seen.0 <= 51 && seen.1 >= 148, "covers the range: {seen:?}");
     }
 
     #[test]

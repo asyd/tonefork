@@ -25,6 +25,14 @@ const VOICE_HINTS: [&str; 8] = [
     "sibilance ('s'), air",
 ];
 const _: () = assert!(VOICE_FREQS.len() == VOICE_HINTS.len());
+
+/// `--preset crossover`: landmarks of an active subwoofer/satellite handover (ADAM Sub8 manual).
+const CROSSOVER_MARKS: [(u32, &str); 4] = [
+    (50, "bottom of the subwoofer's Frequency knob range"),
+    (70, "ADAM suggests 70-75 Hz (-3 dB point) for typical near-field monitors"),
+    (85, "fixed satellite high-pass (Satellite Filter on) / Dolby reference"),
+    (150, "top of the subwoofer's Frequency knob range"),
+];
 /// Hard ceiling, in dBFS RMS. Protects ears and speakers.
 const MAX_LEVEL_DB: f32 = -12.0;
 
@@ -38,11 +46,13 @@ MODES:
   tone <hz>             Continuous sine
   band <hz>             Continuous octave-wide pink-noise band (easier to judge than a sine)
   noise                 Continuous pink noise (flat on average: best for overall tonal balance)
-  sweep                 Logarithmic sweep 20 Hz -> 20 kHz, repeated
+  sweep                 Logarithmic sweep (default 20 Hz -> 20 kHz), repeated; see --from/--to
   steps                 Walk through frequencies, one after the other
 
 OPTIONS:
   --device <text>       Output device whose name contains <text> (default: system default)
+  --buffer-ms <ms>      Audio buffer size, default 200. Smaller = markers and Ctrl-C follow the sound more
+                        closely; larger = safer on a busy machine
   --rate <hz>           Request this sample rate for the stream (e.g. 96000, 192000). See docs/sample-rates.md
   --force-clock         With --rate: set PipeWire's clock to that rate while playing, then restore it
                         (affects the whole desktop; the DAC may click when the rate changes)
@@ -51,7 +61,9 @@ OPTIONS:
   --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
   --freqs <a,b,c>       Frequencies for `steps` (default: the 10 octave bands 31.5 Hz..16 kHz)
   --noise               `steps` with band noise instead of sine tones
+  --from <hz> --to <hz> Range of `sweep` (default 20..20000)
   --preset voice        `steps` over the voice range (125 Hz..6 kHz, band noise, 5 s each), with hints
+  --preset crossover    `sweep` 50..150 Hz over 20 s, marking the usual subwoofer/satellite handover
   -h, --help            This help
 
 Ctrl-C fades out before stopping. Start with the DAC volume LOW, then raise it.";
@@ -66,17 +78,22 @@ struct Args {
     device: Option<String>,
     host: Option<String>,
     rate: Option<u32>,
+    buffer_ms: u32,
     force_clock: bool,
     level_db: f32,
     /// One hint per step, printed next to the frequency (presets only).
     hints: Option<&'static [&'static str]>,
+    /// `sweep` only: frequencies worth a comment, printed as the sweep passes them.
+    marks: Option<&'static [(u32, &'static str)]>,
 }
 
 fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
     let (mut device, mut host, mut rate, mut level_db) = (None, None, None, DEFAULT_LEVEL_DB);
     let mut force_clock = false;
+    let mut buffer_ms = 200u32;
     let mut preset: Option<String> = None;
+    let (mut from, mut to) = (None::<f32>, None::<f32>);
     let (mut secs, mut freqs, mut noise) = (None, None::<Vec<f32>>, false);
     let mut positional = Vec::new();
     while let Some(a) = it.next() {
@@ -88,6 +105,13 @@ fn parse() -> Result<Args> {
             "--device" => device = Some(it.next().ok_or_else(|| anyhow!("--device needs a value"))?),
             "--host" => host = Some(it.next().ok_or_else(|| anyhow!("--host needs a value"))?),
             "--force-clock" => force_clock = true,
+            "--buffer-ms" => {
+                let v = it.next().ok_or_else(|| anyhow!("--buffer-ms needs a value"))?;
+                buffer_ms = v.parse().context("--buffer-ms must be an integer (ms)")?;
+                if !(10..=2000).contains(&buffer_ms) {
+                    bail!("--buffer-ms must be between 10 and 2000");
+                }
+            }
             "--rate" => {
                 let v = it.next().ok_or_else(|| anyhow!("--rate needs a value"))?;
                 let r: u32 = v.parse().context("--rate must be an integer (Hz)")?;
@@ -109,6 +133,11 @@ fn parse() -> Result<Args> {
                 freqs = Some(v.split(',').map(|f| f.trim().parse::<f32>()).collect::<Result<_, _>>().context("--freqs: comma-separated numbers")?);
             }
             "--noise" => noise = true,
+            "--from" | "--to" => {
+                let v = it.next().ok_or_else(|| anyhow!("{a} needs a value"))?;
+                let f = v.parse::<f32>().context("--from/--to must be numbers (Hz)")?;
+                if a == "--from" { from = Some(f) } else { to = Some(f) }
+            }
             "--preset" => preset = Some(it.next().ok_or_else(|| anyhow!("--preset needs a value"))?),
             _ => positional.push(a),
         }
@@ -127,17 +156,28 @@ fn parse() -> Result<Args> {
         Ok(f)
     };
     let mut hints: Option<&'static [&'static str]> = None;
+    let mut marks: Option<&'static [(u32, &'static str)]> = None;
     let mode = match positional.first().map(String::as_str) {
         Some("list") => Mode::List,
         Some("tone") => Mode::Play(Kind::Sine(hz(positional.get(1), "tone <hz>")?)),
         Some("band") => Mode::Play(Kind::Band(hz(positional.get(1), "band <hz>")?)),
         Some("noise") => Mode::Play(Kind::Pink),
-        Some("sweep") => Mode::Play(Kind::Sweep(secs.unwrap_or(12.0).max(1.0))),
+        Some("sweep") => {
+            if preset.as_deref() == Some("crossover") {
+                // The zone where a subwoofer hands over to the main speakers.
+                marks = Some(&CROSSOVER_MARKS);
+                from = from.or(Some(50.0));
+                to = to.or(Some(150.0));
+                secs = secs.or(Some(20.0));
+            }
+            let (from, to) = (from.unwrap_or(20.0), to.unwrap_or(20000.0));
+            if !(20.0..=20000.0).contains(&from) || !(20.0..=20000.0).contains(&to) || from >= to {
+                bail!("--from and --to must be between 20 and 20000 Hz, with --from below --to");
+            }
+            Mode::Play(Kind::Sweep { secs: secs.unwrap_or(12.0).max(1.0), from, to })
+        }
         Some("steps") => {
-            if let Some(name) = preset.as_deref() {
-                if name != "voice" {
-                    bail!("unknown preset {name:?} (available: voice)");
-                }
+            if preset.as_deref() == Some("voice") {
                 // The voice range, with what each band tends to reveal.
                 hints = Some(&VOICE_HINTS);
                 noise = true;
@@ -155,10 +195,12 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
-    if preset.is_some() && !matches!(mode, Mode::Play(Kind::Steps { .. })) {
-        bail!("--preset only applies to the `steps` mode");
+    match (preset.as_deref(), &mode) {
+        (None, _) | (Some("voice"), Mode::Play(Kind::Steps { .. })) | (Some("crossover"), Mode::Play(Kind::Sweep { .. })) => {}
+        (Some("voice" | "crossover"), _) => bail!("`--preset voice` goes with `steps`, `--preset crossover` with `sweep`"),
+        (Some(other), _) => bail!("unknown preset {other:?} (available: voice, crossover)"),
     }
-    Ok(Args { mode, device, host, rate, force_clock, level_db, hints })
+    Ok(Args { mode, device, host, rate, buffer_ms, force_clock, level_db, hints, marks })
 }
 
 fn print_step(freqs: &[f32], hints: Option<&[&str]>, p: usize) {
@@ -309,6 +351,21 @@ fn hardware_report() -> Vec<String> {
     lines
 }
 
+fn print_hardware(rate: Option<u32>, force_clock: bool) {
+    let hw = hardware_report();
+    if hw.is_empty() {
+        println!("Hardware: (no running ALSA playback found)");
+        return;
+    }
+    println!("Hardware running now (what the DAC actually receives):");
+    hw.iter().for_each(|l| println!("  {l}"));
+    if let Some(r) = rate.filter(|_| force_clock) {
+        if !hw.iter().any(|l| l.contains(&format!(": {r} Hz"))) {
+            println!("  note: the hardware is not at {r} Hz. Another stream may be pinning PipeWire's clock (see `pw-top`).");
+        }
+    }
+}
+
 fn build<T>(device: &Device, config: StreamConfig, mut sig: Signal, errors: Arc<AtomicUsize>) -> Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -351,11 +408,16 @@ fn main() -> Result<()> {
         (true, Some(r)) => Some(ClockGuard::force(r)?),
         _ => None,
     };
-    let config: StreamConfig = supported.clone().into();
+    let mut config: StreamConfig = supported.clone().into();
+    if let cpal::SupportedBufferSize::Range { min, max } = supported.buffer_size() {
+        let frames = (config.sample_rate as u64 * args.buffer_ms as u64 / 1000) as u32;
+        config.buffer_size = cpal::BufferSize::Fixed(frames.clamp(*min, *max));
+    }
     let sr = config.sample_rate as f32;
 
     let (stop, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
     let args_hints = args.hints;
+    let sweep_marks = args.marks.filter(|_| matches!(kind, Kind::Sweep { .. }));
     let steps = match &kind {
         Kind::Steps { freqs, .. } => Some(freqs.clone()),
         _ => None,
@@ -389,22 +451,32 @@ fn main() -> Result<()> {
         print_step(f, args_hints, 0);
         last = 0;
     }
-    std::thread::sleep(Duration::from_millis(1500));
-    let hw = hardware_report();
-    if hw.is_empty() {
-        println!("Hardware: (no running ALSA playback found)");
-    } else {
-        println!("Hardware running now (what the DAC actually receives):");
-        hw.iter().for_each(|l| println!("  {l}"));
-        if let Some(r) = args.rate.filter(|_| args.force_clock) {
-            if !hw.iter().any(|l| l.contains(&format!(": {r} Hz"))) {
-                println!("  note: the hardware is not at {r} Hz. Another stream may be pinning PipeWire's clock (see `pw-top`).");
+    // The hardware report is printed from the loop below once playback has settled,
+    // so that it never delays the progress lines.
+    let started = std::time::Instant::now();
+    let mut reported = false;
+    let (want_rate, forced) = (args.rate, args.force_clock);
+
+    let mut last_bucket = u32::MAX;
+    while !done.load(Ordering::Relaxed) {
+        if !reported && started.elapsed() >= Duration::from_millis(1500) {
+            reported = true;
+            print_hardware(want_rate, forced);
+        }
+        if let Some(marks) = sweep_marks {
+            // Progress of the sweep, every 5 Hz, with a comment at the landmarks.
+            let bucket = position.load(Ordering::Relaxed) as u32 / 5 * 5;
+            if bucket != last_bucket {
+                if bucket < last_bucket && last_bucket != u32::MAX {
+                    println!("  -- again --");
+                }
+                last_bucket = bucket;
+                match marks.iter().find(|(f, _)| *f / 5 * 5 == bucket) {
+                    Some((_, text)) => println!("  {bucket:>4} Hz   {text}"),
+                    None => println!("  {bucket:>4} Hz"),
+                }
             }
         }
-    }
-    println!();
-
-    while !done.load(Ordering::Relaxed) {
         if let Some(f) = &steps {
             let p = position.load(Ordering::Relaxed);
             if p != last {
