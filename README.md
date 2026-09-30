@@ -95,8 +95,14 @@ This forces PipeWire's clock for the duration of the run and restores it afterwa
 
 ## Documentation
 
-- [docs/audio-path.md](docs/audio-path.md): the layers between `tonefork` and the speakers (cpal, PipeWire, ALSA, USB, the DAC), with a diagram.
+- [docs/audio-path.md](docs/audio-path.md): the layers between `tonefork` and the speakers (cpal, PipeWire, ALSA, USB, the DAC, an optional active subwoofer), with a diagram.
 - [docs/sample-rates.md](docs/sample-rates.md): playing at a high sample rate on Linux, and checking what the DAC receives.
+
+The audio path, from the application to the speakers (click for the details):
+
+<p align="center">
+  <a href="docs/audio-path.md"><img src="docs/audio-path.svg" alt="Audio path: tonefork, PipeWire, ALSA, USB, DAC, subwoofer and speakers" width="520"></a>
+</p>
 
 ## Safety
 
