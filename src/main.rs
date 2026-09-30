@@ -11,6 +11,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const DEFAULT_LEVEL_DB: f32 = -40.0;
+
+/// `--preset voice`: where the human voice lives, and what each region tends to reveal.
+const VOICE_FREQS: [f32; 8] = [125.0, 250.0, 500.0, 1000.0, 2000.0, 3000.0, 4000.0, 6000.0];
+const VOICE_HINTS: [&str; 8] = [
+    "chest, low body of a male voice",
+    "warmth; muddy or boxy when there is too much",
+    "hollow, 'honky' when excessive; body of the vowels",
+    "core of the vowels; nasal when excessive",
+    "presence: voice comes forward",
+    "intelligibility, consonants (the ear is most sensitive here)",
+    "edge; harsh or shouty when excessive",
+    "sibilance ('s'), air",
+];
+const _: () = assert!(VOICE_FREQS.len() == VOICE_HINTS.len());
 /// Hard ceiling, in dBFS RMS. Protects ears and speakers.
 const MAX_LEVEL_DB: f32 = -12.0;
 
@@ -37,6 +51,7 @@ OPTIONS:
   --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
   --freqs <a,b,c>       Frequencies for `steps` (default: the 10 octave bands 31.5 Hz..16 kHz)
   --noise               `steps` with band noise instead of sine tones
+  --preset voice        `steps` over the voice range (125 Hz..6 kHz, band noise, 5 s each), with hints
   -h, --help            This help
 
 Ctrl-C fades out before stopping. Start with the DAC volume LOW, then raise it.";
@@ -53,12 +68,15 @@ struct Args {
     rate: Option<u32>,
     force_clock: bool,
     level_db: f32,
+    /// One hint per step, printed next to the frequency (presets only).
+    hints: Option<&'static [&'static str]>,
 }
 
 fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
     let (mut device, mut host, mut rate, mut level_db) = (None, None, None, DEFAULT_LEVEL_DB);
     let mut force_clock = false;
+    let mut preset: Option<String> = None;
     let (mut secs, mut freqs, mut noise) = (None, None::<Vec<f32>>, false);
     let mut positional = Vec::new();
     while let Some(a) = it.next() {
@@ -91,6 +109,7 @@ fn parse() -> Result<Args> {
                 freqs = Some(v.split(',').map(|f| f.trim().parse::<f32>()).collect::<Result<_, _>>().context("--freqs: comma-separated numbers")?);
             }
             "--noise" => noise = true,
+            "--preset" => preset = Some(it.next().ok_or_else(|| anyhow!("--preset needs a value"))?),
             _ => positional.push(a),
         }
     }
@@ -107,6 +126,7 @@ fn parse() -> Result<Args> {
         }
         Ok(f)
     };
+    let mut hints: Option<&'static [&'static str]> = None;
     let mode = match positional.first().map(String::as_str) {
         Some("list") => Mode::List,
         Some("tone") => Mode::Play(Kind::Sine(hz(positional.get(1), "tone <hz>")?)),
@@ -114,6 +134,16 @@ fn parse() -> Result<Args> {
         Some("noise") => Mode::Play(Kind::Pink),
         Some("sweep") => Mode::Play(Kind::Sweep(secs.unwrap_or(12.0).max(1.0))),
         Some("steps") => {
+            if let Some(name) = preset.as_deref() {
+                if name != "voice" {
+                    bail!("unknown preset {name:?} (available: voice)");
+                }
+                // The voice range, with what each band tends to reveal.
+                hints = Some(&VOICE_HINTS);
+                noise = true;
+                freqs = freqs.or_else(|| Some(VOICE_FREQS.to_vec()));
+                secs = secs.or(Some(5.0));
+            }
             let freqs = freqs.unwrap_or_else(|| OCTAVES.to_vec());
             if freqs.is_empty() || freqs.iter().any(|f| !(20.0..=20000.0).contains(f)) {
                 bail!("--freqs: values must be between 20 and 20000 Hz");
@@ -125,7 +155,17 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
-    Ok(Args { mode, device, host, rate, force_clock, level_db })
+    if preset.is_some() && !matches!(mode, Mode::Play(Kind::Steps { .. })) {
+        bail!("--preset only applies to the `steps` mode");
+    }
+    Ok(Args { mode, device, host, rate, force_clock, level_db, hints })
+}
+
+fn print_step(freqs: &[f32], hints: Option<&[&str]>, p: usize) {
+    match hints.and_then(|h| h.get(p)) {
+        Some(hint) => println!("  {:>8.1} Hz   {hint}", freqs[p]),
+        None => println!("  {:>8.1} Hz", freqs[p]),
+    }
 }
 
 fn label(d: &Device) -> String {
@@ -315,6 +355,7 @@ fn main() -> Result<()> {
     let sr = config.sample_rate as f32;
 
     let (stop, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let args_hints = args.hints;
     let steps = match &kind {
         Kind::Steps { freqs, .. } => Some(freqs.clone()),
         _ => None,
@@ -341,6 +382,13 @@ fn main() -> Result<()> {
     println!("Level  : {:.0} dBFS RMS (max {MAX_LEVEL_DB:.0}). Start with the DAC volume low!", args.level_db);
     println!("Ctrl-C to stop (fades out).\n");
     stream.play()?;
+    let mut last = usize::MAX;
+    if let Some(f) = &steps {
+        // Show the first step right away, not after the hardware report below.
+        println!("Steps:");
+        print_step(f, args_hints, 0);
+        last = 0;
+    }
     std::thread::sleep(Duration::from_millis(1500));
     let hw = hardware_report();
     if hw.is_empty() {
@@ -356,13 +404,12 @@ fn main() -> Result<()> {
     }
     println!();
 
-    let mut last = usize::MAX;
     while !done.load(Ordering::Relaxed) {
         if let Some(f) = &steps {
             let p = position.load(Ordering::Relaxed);
             if p != last {
                 last = p;
-                println!("  {:>8.1} Hz", f[p]);
+                print_step(f, args_hints, p);
             }
         }
         std::thread::sleep(Duration::from_millis(40));

@@ -67,6 +67,16 @@ Every mode is scaled to the same **RMS** level, so switching between them does n
 
 Why noise rather than sines? Low and very high sine tones are hard to hear at low level (the ear is much less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
 
+## Checking the voice range
+
+```sh
+tonefork --preset voice steps
+```
+
+Plays octave-wide bands of noise at 125, 250, 500, 1000, 2000, 3000, 4000 and 6000 Hz, 5 s each, printing what each region tends to reveal (chest, warmth, "honky", vowels, presence, intelligibility, edge, sibilance). Use it to put a name on the region you are adjusting: a voice that "lacks mids" usually means roughly 300 Hz to 4 kHz.
+
+To judge an EQ change on real material, compare at **equal loudness** (a boost makes things louder, and louder sounds better), with small gains (+2 to +3 dB). Speech (a podcast, a radio recording) is a cleaner test than a mixed song, because an EQ acts on the whole mix and cannot isolate one voice.
+
 ## Sample rate
 
 A PipeWire desktop resamples everything to its own clock (48 kHz by default), whatever an application asks for. `tonefork` prints the rate the hardware is **really** running at, 1.5 s after starting:
