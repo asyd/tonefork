@@ -6,6 +6,18 @@ It plays steady tones, bands of noise, pink noise and sweeps at a controlled, ma
 
 It can also show, and force, the sample rate your hardware really receives: handy to check what a DAC gets through PipeWire (see [Sample rate](#sample-rate)).
 
+## Download
+
+A Linux amd64 binary of the latest commit on `main` is published as the [**latest** pre-release](https://github.com/asyd/tonefork/releases/tag/latest). It is rebuilt at every push (not a versioned release), on Debian 12, so it runs on Debian 12+, Ubuntu 22.04+ and most recent distributions. It needs the ALSA runtime library (`libasound2` on Debian/Ubuntu).
+
+```sh
+gh release download latest --repo asyd/tonefork    # or download the archive from the release page
+sha256sum -c tonefork-linux-amd64.tar.gz.sha256
+tar xzf tonefork-linux-amd64.tar.gz && ./tonefork list
+```
+
+Or build it yourself, as described below.
+
 ## Quick start
 
 ```sh
