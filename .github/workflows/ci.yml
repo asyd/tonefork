@@ -1,7 +1,8 @@
 name: CI
 
 # Build and test on every push to main (and on pull requests).
-# No release: the binary is kept as a workflow artifact for a few days.
+# On main, the binary is also published as a rolling pre-release named "latest",
+# replaced at each push (not a versioned release).
 on:
   push:
     branches: [main]
@@ -43,5 +44,37 @@ jobs:
         with:
           name: tonefork-linux-amd64
           path: tonefork-linux-amd64.tar.gz
-          retention-days: 14
+          retention-days: 7
           if-no-files-found: error
+
+  publish:
+    name: Publish the "latest" build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # One update at a time, never cancelled half-way.
+    concurrency:
+      group: latest-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tonefork-linux-amd64
+
+      - name: Checksum
+        run: sha256sum tonefork-linux-amd64.tar.gz > tonefork-linux-amd64.tar.gz.sha256
+
+      - name: Replace the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
+          gh release create latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Latest build (main)" \
+            --notes "Automatic build of the latest commit on main (${GITHUB_SHA::7}), replaced at every push. Not a versioned release. Linux amd64, built on Debian 12 (glibc 2.36); needs the ALSA runtime library (libasound2 on Debian/Ubuntu)." \
+            tonefork-linux-amd64.tar.gz tonefork-linux-amd64.tar.gz.sha256
