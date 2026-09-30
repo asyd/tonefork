@@ -43,7 +43,16 @@ digraph audio_path {
     midirx [label="MIDI / SysEx interface", fillcolor="#fff3d6", color="#d9a441"];
   }
 
-  spk [label="Speakers / headphones", shape=box, style="rounded,filled", fillcolor="#dff5df", color="#4c9a4c"];
+  // Example of an analog chain: active subwoofer with satellite outputs (ADAM Sub8 manual).
+  subwoofer [label="Active subwoofer (example: ADAM Sub8)\nL/R line input (XLR)\nwoofer: low-pass, 50–150 Hz knob\nSATELLITE OUT: full range, or 85 Hz high-pass (switch)", shape=box, style="rounded,filled", fillcolor="#fdf0d5", color="#c98a1a"];
+  woofer [label="Woofer", shape=box, style="rounded,filled", fillcolor="#dff5df", color="#4c9a4c"];
+  sats [label="Main speakers (satellites)", shape=box, style="rounded,filled", fillcolor="#dff5df", color="#4c9a4c"];
+  phones [label="Headphones / IEM", shape=box, style="rounded,filled", fillcolor="#dff5df", color="#4c9a4c"];
+
+  analog -> subwoofer [label="Line out (XLR)"];
+  subwoofer -> woofer;
+  subwoofer -> sats [label="satellite out"];
+  analog -> phones [label="Phones / IEM out"];
 
   // Default audio path
   tonefork -> cpal_pulse;
@@ -55,7 +64,7 @@ digraph audio_path {
   xhci -> cable [penwidth=3, color="#444444", dir=both];
   cable -> usbif [penwidth=3, color="#444444", dir=both];
   usbif -> usbrx [label="audio"];
-  usbrx -> dsp -> dac -> analog -> spk;
+  usbrx -> dsp -> dac -> analog;
 
   // Alternative ALSA path
   tonefork -> cpal_alsa [style=dashed, color="#999999"];

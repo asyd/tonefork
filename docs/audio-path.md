@@ -17,7 +17,10 @@ flowchart TD
     K --> U["ONE USB cable<br/>(audio + MIDI)"]
     U --> D[ADI-2 DAC<br/>volume · EQ · Bass/Treble · filter]
     D --> A[D/A converter + analog stage]
-    A --> O[Speakers / headphones]
+    A -->|"Line out (XLR)"| SUB["Active subwoofer (e.g. ADAM Sub8)<br/>woofer: low-pass 50–150 Hz<br/>satellite out: full range or 85 Hz high-pass"]
+    SUB --> WF[Woofer]
+    SUB -->|satellite out| SAT[Main speakers]
+    A -->|"Phones / IEM out"| HP[Headphones]
 
     R[rmediy-rs] -. "SysEx over MIDI" .-> U
     T2[tonefork --host alsa] -. "libasound · 'pulse' plugin" .-> P
@@ -45,13 +48,28 @@ flowchart TD
 
 `rmediy-rs` never touches the audio: it sends SysEx messages over **MIDI** (`midir` → ALSA rawmidi → `snd-usb-audio` → the same USB cable) to change the DAC's internal processing. That is why an EQ change made in `rmediy-rs` is audible in whatever you play, whichever audio path it takes.
 
+## An example of analog chain: an active subwoofer
+
+Everything above ends at the DAC's analog outputs. What follows depends on your gear. A common one: the Line Out (XLR) goes to an **active subwoofer**, and the main speakers ("satellites") are fed from the subwoofer's outputs. For the ADAM Sub8, its [manual](https://www.adam-audio.com/content/uploads/2018/03/adam-audio-sub8-subwoofer-user-manual-en-de.pdf) says:
+
+- The source's left and right line outputs go to the subwoofer's **L/R inputs** (XLR or RCA); the main speakers connect to its **L/R SATELLITE OUT**. The manual recommends, if possible, sending the main signal into the subwoofer and connecting the satellites to its output.
+- The **Frequency** knob sets the upper limit of the subwoofer, **50 to 150 Hz** (an 85 Hz marker is the Dolby recommendation for surround; ADAM suggests 70–75 Hz, as the -3 dB point, for typical near-field monitors).
+- The **Satellite Filter** switch chooses what the satellites receive: the signal **full range**, or **high-passed at 85 Hz**. That 85 Hz is a fixed value of the switch; it does not follow the Frequency knob.
+- A **Phase** switch (0° / 180°) sets the woofer's polarity relative to the satellites; try it again whenever the frequency changes.
+- The **Volume** knob is the input sensitivity (-60 to +6 dB relative to 775 mV on XLR).
+
+The manual does not state the filter slopes.
+
+What this means for tests: a signal below about 85 Hz is mostly reproduced by the woofer, so a band at 63 Hz tests the subwoofer, not the satellites, and its level also depends on the subwoofer's own Volume knob. The DAC's EQ and Bass/Treble act *before* the subwoofer, so their effect on the low end adds to the subwoofer's settings. The voice range (125 Hz and above) goes to the satellites.
+
 ## Three volume stages
 
-What you hear is the product of three independent gains:
+What you hear is the product of independent gains:
 
 1. the application's level (`tonefork --level`, `-40 dBFS` by default);
 2. PipeWire's **sink volume** (a software gain, e.g. 60 % ≈ -13 dB on the sink of this machine);
-3. the DAC's own volume (and its EQ, Bass/Treble, loudness...).
+3. the DAC's own volume (and its EQ, Bass/Treble, loudness...);
+4. after the DAC, whatever the analog chain adds (for example a subwoofer's input sensitivity).
 
 Remember this when a signal seems "too quiet" or "too loud", and when comparing settings: change only one of them at a time.
 
