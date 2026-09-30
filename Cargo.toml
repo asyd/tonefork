@@ -1,0 +1,11 @@
+[package]
+name = "tonegen"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Test-signal generator (tones, band noise, sweeps, pink noise) to hear the effect of EQ and Bass/Treble settings"
+
+[dependencies]
+anyhow = "1.0.104"
+cpal = "0.18.2"
+ctrlc = "3.5.2"
