@@ -30,12 +30,16 @@ digraph audio_path {
     xhci [label="USB host controller (xHCI)", fillcolor="#ffffff"];
   }
 
-  // One physical cable: audio and MIDI travel together and are separated inside the DAC.
-  cable [label="ONE USB cable\n(audio + MIDI share it)", shape=box, style="filled", fillcolor="#e8e8e8", color="#444444", penwidth=2];
+  // One physical cable: audio and MIDI are two logical links inside the same circle.
+  cable [shape=ellipse, style=filled, fillcolor="#e8e8e8", color="#444444", penwidth=2, margin="0.15,0.05",
+         label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2">
+                  <TR><TD PORT="audio" WIDTH="50" HEIGHT="46"><FONT POINT-SIZE="10">audio</FONT></TD>
+                      <TD WIDTH="110"><FONT POINT-SIZE="11"><B>one physical<BR/>USB cable</B></FONT></TD>
+                      <TD PORT="midi" WIDTH="50" HEIGHT="46"><FONT POINT-SIZE="10" COLOR="#b07a1a">MIDI</FONT></TD></TR>
+                </TABLE>>];
 
   subgraph cluster_dac {
     label="RME ADI-2 DAC"; style="rounded,filled"; fillcolor="#f3eefc"; color="#a48bd6";
-    usbif [label="USB interface\n(one device, two functions)", fillcolor="#ffffff"];
     usbrx [label="USB audio class 2 receiver\n(async endpoint + feedback)", fillcolor="#ffffff"];
     dsp [label="Digital processing\nvolume · Parametric EQ · Bass/Treble\nLoudness · Crossfeed · DA filter\n(the settings rmediy-rs changes)", fillcolor="#ffe9b3", color="#d9a441"];
     dac [label="D/A converter", fillcolor="#ffffff"];
@@ -61,9 +65,8 @@ digraph audio_path {
   graph_ -> sink;
   sink -> sndusb [label="libasound"];
   sndusb -> xhci;
-  xhci -> cable [penwidth=3, color="#444444", dir=both];
-  cable -> usbif [penwidth=3, color="#444444", dir=both];
-  usbif -> usbrx [label="audio"];
+  xhci -> cable:audio:n [penwidth=2, color="#555555", label="audio\none way: PC → DAC"];
+  cable:audio:s -> usbrx [penwidth=2, color="#555555"];
   usbrx -> dsp -> dac -> analog;
 
   // Alternative ALSA path
@@ -73,9 +76,10 @@ digraph audio_path {
   libasound -> sndusb [style=dashed, color="#999999", label="hw:… direct\n(only if nobody\nholds the device)"];
 
   // Control path
-  rmediy -> midir [color="#d9a441"];
-  midir -> usbmidi [color="#d9a441"];
-  usbmidi -> xhci [color="#d9a441"];
-  usbif -> midirx [color="#d9a441", label="MIDI"];
+  rmediy -> midir [color="#d9a441", dir=both];
+  midir -> usbmidi [color="#d9a441", dir=both];
+  usbmidi -> xhci [color="#d9a441", dir=both];
+  xhci -> cable:midi:n [penwidth=2, color="#d9a441", dir=both, label="MIDI\nboth ways"];
+  cable:midi:s -> midirx [penwidth=2, color="#d9a441", dir=both];
   midirx -> dsp [color="#d9a441", label="SysEx: set / status", dir=both];
 }

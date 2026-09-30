@@ -14,7 +14,7 @@ flowchart TD
     P --> G[PipeWire graph<br/>mix · resample · sink volume]
     G --> S[ALSA sink node<br/>front:4]
     S -->|libasound| K[ALSA core + snd-usb-audio<br/>S32_LE · 2 ch · 48 kHz]
-    K --> U["ONE USB cable<br/>(audio + MIDI)"]
+    K -->|"audio: one way"| U["ONE USB cable<br/>(audio + MIDI)"]
     U --> D[ADI-2 DAC<br/>volume · EQ · Bass/Treble · filter]
     D --> A[D/A converter + analog stage]
     A -->|"Line out (XLR)"| SUB["Active subwoofer (e.g. ADAM Sub8)<br/>woofer: low-pass 50–150 Hz<br/>satellite out: full range or 85 Hz high-pass"]
@@ -22,7 +22,7 @@ flowchart TD
     SUB -->|satellite out| SAT[Main speakers]
     A -->|"Phones / IEM out"| HP[Headphones]
 
-    R[rmediy-rs] -. "SysEx over MIDI" .-> U
+    R[rmediy-rs] <-.->|"SysEx over MIDI: both ways"| U
     T2[tonefork --host alsa] -. "libasound · 'pulse' plugin" .-> P
 ```
 
@@ -36,7 +36,7 @@ flowchart TD
 | **PipeWire** | The sound server: mixes the streams of all applications, resamples them to the device's rate, applies the **sink volume**. |
 | **ALSA sink node** | PipeWire's output to the hardware. It opens the ALSA device (`front:4` here) through `libasound`. |
 | **Kernel: ALSA core + `snd-usb-audio`** | The driver. Exposes the DAC as a sound card, with a memory-mapped ring buffer (here 512-frame periods, 32768-frame buffer). |
-| **USB (one cable)** | A single physical cable carries both the audio (USB audio class 2: isochronous transfers, the DAC's clock drives the rate through a feedback endpoint) and the MIDI. The DAC separates them internally. |
+| **USB (one cable)** | A single physical cable carries both the audio and the MIDI; the DAC separates them internally. The **audio is one-way** (PC → DAC: isochronous transfers, USB audio class 2; the only thing coming back is a small rate-feedback message, because the DAC's clock drives the rate). The **MIDI is two-way**: `rmediy-rs` sends settings and the DAC reports its state. |
 | **ADI-2 DAC** | Receives the stream, applies its **own** processing (volume, parametric EQ, Bass/Treble, loudness, crossfeed, filter), converts to analog. |
 
 ## Two paths to keep in mind
