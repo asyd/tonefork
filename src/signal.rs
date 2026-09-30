@@ -1,7 +1,7 @@
 //! Test signals. Every mode is scaled to the same *RMS* level, so switching between a
 //! sine, a band of noise and pink noise does not change the perceived loudness much.
 
-use std::f32::consts::{SQRT_2, TAU};
+use std::f32::consts::{FRAC_1_SQRT_2, SQRT_2, TAU};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -20,6 +20,14 @@ pub enum Kind {
     /// Logarithmic sweep from `from` to `to` (Hz) over `secs` seconds, repeated.
     /// While playing, `Signal::position` holds the current frequency in Hz.
     Sweep { secs: f32, from: f32, to: f32 },
+    /// Stereo check: left only, right only, then the middle (both channels, -3 dB each so that it
+    /// has the same power as one channel alone), `secs` each, repeated. With `polarity`, a fourth
+    /// step plays both channels with the right one inverted. Pink noise, or a sine if `freq` is given.
+    Stereo { freq: Option<f32>, secs: f32, polarity: bool },
+    /// A bell struck over and over while its position moves from left to right and back
+    /// (`secs` for one left-to-right pass), with an equal-power pan law.
+    /// `Signal::position` holds `strike_number << 8 | pan_percent` (0 = left, 100 = right).
+    Pan { f0: f32, secs: f32 },
     /// Steps through the frequencies, `secs` each; sine or band noise.
     Steps { freqs: Vec<f32>, secs: f32, noise: bool },
 }
@@ -122,7 +130,61 @@ enum Engine {
     Band(BandNoise),
     Sweep { phase: f32, pos: f32, secs: f32, from: f32, to: f32 },
     Steps { freqs: Vec<f32>, noises: Vec<BandNoise>, noise: bool, idx: usize, n: usize, seg: usize, phase: f32 },
+    Pan { f0: f32, every: usize, sweep: usize, t: usize, strikes: Vec<Strike>, count: usize, gain: f32 },
+    Stereo { freq: Option<f32>, pink: Pink, pink_gain: f32, phase: f32, idx: usize, n: usize, seg: usize, steps: &'static [[f32; 2]] },
 }
+
+/// Jean-Claude Risset's bell: (amplitude, frequency ratio, decay-time ratio, detune in Hz).
+/// The detuned pairs make the slow beating of a real bell.
+const BELL: [(f32, f32, f32, f32); 11] = [
+    (1.0, 0.56, 1.0, 0.0),
+    (0.67, 0.56, 0.9, 1.0),
+    (1.0, 0.92, 0.65, 0.0),
+    (1.8, 0.92, 0.55, 1.7),
+    (2.67, 1.19, 0.325, 0.0),
+    (1.67, 1.7, 0.35, 0.0),
+    (1.46, 2.0, 0.25, 0.0),
+    (1.33, 2.74, 0.2, 0.0),
+    (1.33, 3.0, 0.15, 0.0),
+    (1.0, 3.76, 0.1, 0.0),
+    (1.33, 4.07, 0.075, 0.0),
+];
+/// Decay time of the longest partial, in seconds (time to fall by 60 dB).
+const BELL_DECAY_SECS: f32 = 3.0;
+/// Seconds between two strikes.
+const BELL_EVERY_SECS: f32 = 0.8;
+
+#[derive(Clone)]
+struct Strike {
+    age: usize,
+    /// 0.0 = left, 1.0 = right.
+    pan: f32,
+    phase: [f32; 11],
+    env: [f32; 11],
+}
+
+impl Strike {
+    fn new(pan: f32) -> Self {
+        Strike { age: 0, pan, phase: [0.0; 11], env: [1.0; 11] }
+    }
+    /// Next sample of the bell (unscaled), advancing the oscillators and envelopes.
+    fn next(&mut self, f0: f32, sr: f32) -> f32 {
+        let mut x = 0.0;
+        for (i, &(amp, ratio, dur, detune)) in BELL.iter().enumerate() {
+            self.phase[i] = (self.phase[i] + TAU * (ratio * f0 + detune) / sr) % TAU;
+            x += amp * self.env[i] * self.phase[i].sin();
+            // -60 dB after `dur * BELL_DECAY_SECS` seconds
+            self.env[i] *= 10f32.powf(-3.0 / (dur * BELL_DECAY_SECS * sr));
+        }
+        self.age += 1;
+        x
+    }
+}
+
+/// Channel gains of the stereo check: left, right, middle (-3 dB each: equal power), and
+/// optionally the middle with the right channel inverted.
+const STEREO_3: [[f32; 2]; 3] = [[1.0, 0.0], [0.0, 1.0], [FRAC_1_SQRT_2, FRAC_1_SQRT_2]];
+const STEREO_4: [[f32; 2]; 4] = [[1.0, 0.0], [0.0, 1.0], [FRAC_1_SQRT_2, FRAC_1_SQRT_2], [FRAC_1_SQRT_2, -FRAC_1_SQRT_2]];
 
 pub struct Signal {
     sr: f32,
@@ -151,6 +213,19 @@ impl Signal {
                 Engine::Pink { pink: Pink::new(7), gain: 1.0 / rms.max(1e-6) }
             }
             Kind::Band(f) => Engine::Band(BandNoise::new(f, sr, 11)),
+            Kind::Pan { f0, secs } => {
+                // Scale so that the first second of a strike has the requested RMS.
+                let mut s = Strike::new(0.5);
+                let n = sr as usize;
+                let rms = ((0..n).map(|_| (s.next(f0, sr) as f64).powi(2)).sum::<f64>() / n as f64).sqrt() as f32;
+                Engine::Pan { f0, every: (BELL_EVERY_SECS * sr) as usize, sweep: (secs * sr) as usize, t: 0, strikes: Vec::new(), count: 0, gain: 1.0 / rms.max(1e-6) }
+            }
+            Kind::Stereo { freq, secs, polarity } => {
+                let mut p = Pink::new(1);
+                let n = (sr * 2.0) as usize;
+                let rms = ((0..n).map(|_| (p.next() as f64).powi(2)).sum::<f64>() / n as f64).sqrt() as f32;
+                Engine::Stereo { freq, pink: Pink::new(5), pink_gain: 1.0 / rms.max(1e-6), phase: 0.0, idx: 0, n: 0, seg: (secs * sr) as usize, steps: if polarity { &STEREO_4 } else { &STEREO_3 } }
+            }
             Kind::Sweep { secs, from, to } => Engine::Sweep { phase: 0.0, pos: 0.0, secs, from, to },
             Kind::Steps { freqs, secs, noise } => {
                 let noises = if noise { freqs.iter().enumerate().map(|(i, &f)| BandNoise::new(f, sr, 100 + i as u32)).collect() } else { vec![] };
@@ -180,6 +255,7 @@ impl Signal {
             }
             Engine::Pink { pink, gain } => pink.next() * *gain * level,
             Engine::Band(b) => b.next() * level,
+            Engine::Stereo { .. } | Engine::Pan { .. } => 0.0, // handled by `raw_frame`
             Engine::Sweep { phase, pos, secs, from, to } => {
                 let f = *from * (*to / *from).powf(*pos / *secs);
                 self.position.store(f as usize, Ordering::Relaxed);
@@ -216,9 +292,72 @@ impl Signal {
         }
     }
 
+    /// Left channel of the next frame (the mono view of the signal, used by the tests).
+    #[cfg(test)]
     pub fn next(&mut self) -> f32 {
+        self.next_frame()[0]
+    }
+
+    /// True for signals that have distinct left and right channels.
+    pub fn is_stereo(&self) -> bool {
+        matches!(self.engine, Engine::Stereo { .. } | Engine::Pan { .. })
+    }
+
+    fn raw_frame(&mut self) -> [f32; 2] {
+        let (sr, level) = (self.sr, self.level);
+        if let Engine::Stereo { freq, pink, pink_gain, phase, idx, n, seg, steps } = &mut self.engine {
+            let fade = (STEP_FADE_SECS * sr) as usize;
+            let env = if *n < fade {
+                *n as f32 / fade as f32
+            } else if *n + fade > *seg {
+                (*seg - *n) as f32 / fade as f32
+            } else {
+                1.0
+            };
+            let x = match freq {
+                Some(f) => {
+                    *phase = (*phase + TAU * *f / sr) % TAU;
+                    phase.sin() * SQRT_2 * level
+                }
+                None => pink.next() * *pink_gain * level,
+            };
+            let g = steps[*idx];
+            *n += 1;
+            let frame = [x * g[0] * env, x * g[1] * env];
+            if *n >= *seg {
+                *n = 0;
+                *idx = (*idx + 1) % steps.len();
+                self.position.store(*idx, Ordering::Relaxed);
+            }
+            return frame;
+        }
+        if let Engine::Pan { f0, every, sweep, t, strikes, count, gain } = &mut self.engine {
+            if *t % *every == 0 {
+                // Position along a left -> right -> left triangle.
+                let phase = (*t % (2 * *sweep)) as f32 / *sweep as f32;
+                let pan = if phase <= 1.0 { phase } else { 2.0 - phase };
+                strikes.push(Strike::new(pan));
+                *count += 1;
+                self.position.store((*count << 8) | (pan * 100.0).round() as usize, Ordering::Relaxed);
+            }
+            *t += 1;
+            let (mut l, mut r) = (0.0, 0.0);
+            for s in strikes.iter_mut() {
+                let x = s.next(*f0, sr) * *gain * level;
+                let theta = s.pan * std::f32::consts::FRAC_PI_2; // equal-power pan law
+                l += x * theta.cos();
+                r += x * theta.sin();
+            }
+            strikes.retain(|s| (s.age as f32) < BELL_DECAY_SECS * sr);
+            return [l, r];
+        }
+        let x = self.raw();
+        [x, x]
+    }
+
+    pub fn next_frame(&mut self) -> [f32; 2] {
         if self.done.load(Ordering::Relaxed) {
-            return 0.0;
+            return [0.0; 2];
         }
         // Master envelope: slow fade in, short fade out when asked to stop (no clicks).
         if self.out_pos.is_none() && self.stop.load(Ordering::Relaxed) {
@@ -227,7 +366,7 @@ impl Signal {
         let master = match self.out_pos {
             Some(p) if p >= self.fade_out => {
                 self.done.store(true, Ordering::Relaxed);
-                return 0.0;
+                return [0.0; 2];
             }
             Some(p) => {
                 self.out_pos = Some(p + 1);
@@ -236,7 +375,8 @@ impl Signal {
             None => (self.played as f32 / self.fade_in as f32).min(1.0),
         };
         self.played = self.played.saturating_add(1);
-        (self.raw() * master).clamp(-1.0, 1.0)
+        let [l, r] = self.raw_frame();
+        [(l * master).clamp(-1.0, 1.0), (r * master).clamp(-1.0, 1.0)]
     }
 }
 
@@ -319,6 +459,55 @@ mod tests {
         }
         assert!(seen.0 >= 50 && seen.1 <= 150, "{seen:?}");
         assert!(seen.0 <= 51 && seen.1 >= 148, "covers the range: {seen:?}");
+    }
+
+    #[test]
+    fn stereo_steps_are_left_right_and_middle_at_equal_power() {
+        for freq in [None, Some(1000.0)] {
+            let (mut s, ..) = signal(Kind::Stereo { freq, secs: 3.0, polarity: false }, -20.0);
+            assert!(s.is_stereo());
+            let frames: Vec<[f32; 2]> = (0..(SR * 9.0) as usize).map(|_| s.next_frame()).collect();
+            let seg = (SR * 3.0) as usize;
+            let mid = |k: usize| &frames[k * seg + (SR * 1.2) as usize..k * seg + (SR * 2.5) as usize];
+            let power = |w: &[[f32; 2]], c: usize| w.iter().map(|f| (f[c] as f64).powi(2)).sum::<f64>() / w.len() as f64;
+            let db = |p: f64| 10.0 * p.log10();
+            // left only, then right only, at the requested level
+            assert!(mid(0).iter().all(|f| f[1] == 0.0) && mid(1).iter().all(|f| f[0] == 0.0));
+            assert!((db(power(mid(0), 0)) + 20.0).abs() < 1.5, "left level {}", db(power(mid(0), 0)));
+            assert!((db(power(mid(1), 1)) - db(power(mid(0), 0))).abs() < 1.0, "left and right at the same level");
+            // middle: identical channels, total power equal to one channel alone
+            assert!(mid(2).iter().all(|f| f[0] == f[1]));
+            let total = power(mid(2), 0) + power(mid(2), 1);
+            assert!((db(total) - db(power(mid(0), 0))).abs() < 1.0, "middle has the same power");
+        }
+    }
+
+    #[test]
+    fn bell_moves_from_left_to_right_at_constant_power() {
+        let (mut s, ..) = signal(Kind::Pan { f0: 440.0, secs: 4.0 }, -20.0);
+        let frames: Vec<[f32; 2]> = (0..(SR * 9.0) as usize).map(|_| s.next_frame()).collect();
+        // energy of the first strike's first 0.4 s (after the 1 s fade-in: use later strikes)
+        let energy = |from: f32, to: f32, c: usize| -> f64 {
+            frames[(SR * from) as usize..(SR * to) as usize].iter().map(|f| (f[c] as f64).powi(2)).sum()
+        };
+        // strike at 1.6 s is at pan 0.4 (towards the left); strike at 3.2 s at pan 0.8 (towards the right)
+        assert!(energy(1.6, 2.0, 0) > energy(1.6, 2.0, 1), "left-ish at the start");
+        assert!(energy(3.2, 3.6, 1) > energy(3.2, 3.6, 0), "right-ish later");
+        // then it comes back: the strike at 6.4 s (pan 0.4 on the way back) leans left again
+        assert!(energy(6.4, 6.8, 0) > energy(6.4, 6.8, 1), "back to the left");
+        // the position is reported as strike_number << 8 | percent
+        let p = s.position.load(Ordering::Relaxed);
+        assert!(p >> 8 >= 10 && (p & 0xFF) <= 100, "{p:#x}");
+        assert!(frames.iter().all(|f| f[0].abs() <= 1.0 && f[1].abs() <= 1.0));
+    }
+
+    #[test]
+    fn stereo_polarity_step_inverts_the_right_channel() {
+        let (mut s, ..) = signal(Kind::Stereo { freq: Some(500.0), secs: 2.0, polarity: true }, -20.0);
+        let frames: Vec<[f32; 2]> = (0..(SR * 8.0) as usize).map(|_| s.next_frame()).collect();
+        let seg = (SR * 2.0) as usize;
+        let step3 = &frames[3 * seg + (SR * 0.5) as usize..3 * seg + (SR * 1.5) as usize];
+        assert!(step3.iter().all(|f| f[0] == -f[1]) && step3.iter().any(|f| f[0] != 0.0));
     }
 
     #[test]

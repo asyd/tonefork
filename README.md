@@ -41,6 +41,8 @@ Requirements: Rust 1.85+, and on Debian/Ubuntu `libasound2-dev` and `pkg-config`
 | `tonefork tone 1000` | A continuous sine. |
 | `tonefork sweep` | A logarithmic sweep, 20 Hz to 20 kHz by default (`--from`, `--to`), repeated. |
 | `tonefork steps` | Walks through the ten octave bands (31.5 Hz to 16 kHz), 4 s each, printing the frequency. |
+| `tonefork stereo [hz]` | Left only, right only, then the middle, 3 s each, at the same level (pink noise, or a sine at `hz`). See below. |
+| `tonefork pan [hz]` | A bell struck repeatedly, moving from the left speaker to the right one and back (bell pitch `hz`, default 440). |
 | `tonefork list` | Lists the output devices. |
 
 Every mode is scaled to the same **RMS** level, so switching between them does not change the perceived loudness much. Sound fades in over 1 s and fades out on Ctrl-C, so there are no clicks.
@@ -58,6 +60,7 @@ Every mode is scaled to the same **RMS** level, so switching between them does n
 | `--from <Hz>`, `--to <Hz>` | Range of `sweep` (default 20 to 20000). |
 | `--preset <name>` | `voice` (with `steps`) or `crossover` (with `sweep`), see below. |
 | `--buffer-ms <ms>` | Audio buffer, default 200. Smaller: the printed frequencies and Ctrl-C follow the sound more closely. Larger: safer on a busy machine. |
+| `--polarity` | With `stereo`: add a fourth step that inverts the right channel, to check the wiring polarity. |
 | `--rate <Hz>` | Request a sample rate for the stream. |
 | `--force-clock` | With `--rate`: set PipeWire's clock to that rate while playing, then restore it. |
 
@@ -69,6 +72,22 @@ Every mode is scaled to the same **RMS** level, so switching between them does n
 4. Use `tonefork steps --noise` to walk across the spectrum and find which regions a setting affects.
 
 Why noise rather than sines? Low and very high sine tones are hard to hear at low level (the ear is much less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
+
+## Checking the stereo image
+
+```sh
+tonefork stereo               # left, right, middle (pink noise)
+tonefork stereo 1000 --polarity
+tonefork pan                  # a bell moving from left to right and back
+```
+
+`stereo` plays the left speaker alone, then the right one alone, then the middle, each at the same RMS level. The middle plays both channels at -3 dB each, so that it has the same power as one channel alone (the usual pan law). What to check:
+
+- **Left / right:** each sound must come from its own speaker only, and be as loud as the other.
+- **Middle:** the sound must appear midway between the speakers, not stuck in one of them.
+- **`--polarity`:** a fourth step plays the middle with the right channel inverted. It should sound diffuse and thin in the bass. If it sounds *better* than the normal middle step, one speaker is wired in reverse polarity.
+
+`pan` strikes a synthetic bell (additive synthesis after Jean-Claude Risset's bell) every 0.8 s and moves it across the stereo field with an equal-power pan law; each strike prints a small map of its position. The path should be smooth, with no jump or hole in the middle. It is a synthetic bell, not a recording: it does not reproduce any particular record.
 
 ## Checking the voice range
 

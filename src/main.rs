@@ -12,6 +12,14 @@ use std::time::Duration;
 
 const DEFAULT_LEVEL_DB: f32 = -40.0;
 
+/// What to listen for at each step of the `stereo` mode.
+const STEREO_LABELS: [&str; 4] = [
+    "LEFT only: the sound must come from the left speaker alone",
+    "RIGHT only: the sound must come from the right speaker alone, as loud as the left one",
+    "MIDDLE (both channels, -3 dB each): the sound must appear midway between the two speakers",
+    "MIDDLE, right channel inverted: diffuse and thin in the bass. If this sounds BETTER than the previous step, one speaker is wired in reverse polarity",
+];
+
 /// `--preset voice`: where the human voice lives, and what each region tends to reveal.
 const VOICE_FREQS: [f32; 8] = [125.0, 250.0, 500.0, 1000.0, 2000.0, 3000.0, 4000.0, 6000.0];
 const VOICE_HINTS: [&str; 8] = [
@@ -48,6 +56,8 @@ MODES:
   noise                 Continuous pink noise (flat on average: best for overall tonal balance)
   sweep                 Logarithmic sweep (default 20 Hz -> 20 kHz), repeated; see --from/--to
   steps                 Walk through frequencies, one after the other
+  stereo [hz]           Left, right, then middle, at the same level (pink noise, or a sine at <hz>)
+  pan [hz]              A bell struck repeatedly, moving from left to right and back (default bell pitch 440 Hz)
 
 OPTIONS:
   --device <text>       Output device whose name contains <text> (default: system default)
@@ -58,9 +68,11 @@ OPTIONS:
                         (affects the whole desktop; the DAC may click when the rate changes)
   --host <alsa|pulse>   Audio backend. Default: pulse (PipeWire/PulseAudio) when available, else alsa
   --level <dBFS>        RMS level, default -40, maximum -12
-  --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
+  --secs <n>            Seconds per step (steps, default 4; stereo, default 3), per sweep (default 12)
+                        or per left-to-right pass (pan, default 6)
   --freqs <a,b,c>       Frequencies for `steps` (default: the 10 octave bands 31.5 Hz..16 kHz)
   --noise               `steps` with band noise instead of sine tones
+  --polarity            `stereo`: add a 4th step, middle with the right channel inverted (wiring check)
   --from <hz> --to <hz> Range of `sweep` (default 20..20000)
   --preset voice        `steps` over the voice range (125 Hz..6 kHz, band noise, 5 s each), with hints
   --preset crossover    `sweep` 50..150 Hz over 20 s, marking the usual subwoofer/satellite handover
@@ -91,6 +103,7 @@ fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
     let (mut device, mut host, mut rate, mut level_db) = (None, None, None, DEFAULT_LEVEL_DB);
     let mut force_clock = false;
+    let mut polarity = false;
     let mut buffer_ms = 200u32;
     let mut preset: Option<String> = None;
     let (mut from, mut to) = (None::<f32>, None::<f32>);
@@ -133,6 +146,7 @@ fn parse() -> Result<Args> {
                 freqs = Some(v.split(',').map(|f| f.trim().parse::<f32>()).collect::<Result<_, _>>().context("--freqs: comma-separated numbers")?);
             }
             "--noise" => noise = true,
+            "--polarity" => polarity = true,
             "--from" | "--to" => {
                 let v = it.next().ok_or_else(|| anyhow!("{a} needs a value"))?;
                 let f = v.parse::<f32>().context("--from/--to must be numbers (Hz)")?;
@@ -162,6 +176,17 @@ fn parse() -> Result<Args> {
         Some("tone") => Mode::Play(Kind::Sine(hz(positional.get(1), "tone <hz>")?)),
         Some("band") => Mode::Play(Kind::Band(hz(positional.get(1), "band <hz>")?)),
         Some("noise") => Mode::Play(Kind::Pink),
+        Some("pan") => {
+            let f0 = match positional.get(1) {
+                Some(s) => hz(Some(s), "pan [hz]")?,
+                None => 440.0,
+            };
+            Mode::Play(Kind::Pan { f0, secs: secs.unwrap_or(6.0).max(1.0) })
+        }
+        Some("stereo") => {
+            let freq = positional.get(1).map(|s| hz(Some(s), "stereo [hz]")).transpose()?;
+            Mode::Play(Kind::Stereo { freq, secs: secs.unwrap_or(3.0).max(0.5), polarity })
+        }
         Some("sweep") => {
             if preset.as_deref() == Some("crossover") {
                 // The zone where a subwoofer hands over to the main speakers.
@@ -195,6 +220,9 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
+    if polarity && !matches!(mode, Mode::Play(Kind::Stereo { .. })) {
+        bail!("--polarity only applies to the `stereo` mode");
+    }
     match (preset.as_deref(), &mode) {
         (None, _) | (Some("voice"), Mode::Play(Kind::Steps { .. })) | (Some("crossover"), Mode::Play(Kind::Sweep { .. })) => {}
         (Some("voice" | "crossover"), _) => bail!("`--preset voice` goes with `steps`, `--preset crossover` with `sweep`"),
@@ -371,12 +399,23 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels as usize;
+    let stereo = sig.is_stereo();
     let stream = device.build_output_stream(
         config,
         move |data: &mut [T], _: &OutputCallbackInfo| {
             for frame in data.chunks_mut(channels) {
-                let v: T = T::from_sample(sig.next());
-                frame.iter_mut().for_each(|s| *s = v);
+                // Channel 0 is left, channel 1 is right. Mono signals go to every channel; the
+                // stereo check leaves any further channels silent.
+                let [l, r] = sig.next_frame();
+                for (i, s) in frame.iter_mut().enumerate() {
+                    let v = match i {
+                        0 => l,
+                        1 => r,
+                        _ if stereo => 0.0,
+                        _ => l,
+                    };
+                    *s = T::from_sample(v);
+                }
             }
         },
         move |e: Error| {
@@ -417,6 +456,11 @@ fn main() -> Result<()> {
 
     let (stop, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
     let args_hints = args.hints;
+    let is_pan = matches!(kind, Kind::Pan { .. });
+    let stereo_labels: Option<&'static [&'static str]> = match &kind {
+        Kind::Stereo { polarity, .. } => Some(if *polarity { &STEREO_LABELS[..] } else { &STEREO_LABELS[..3] }),
+        _ => None,
+    };
     let sweep_marks = args.marks.filter(|_| matches!(kind, Kind::Sweep { .. }));
     let steps = match &kind {
         Kind::Steps { freqs, .. } => Some(freqs.clone()),
@@ -457,11 +501,31 @@ fn main() -> Result<()> {
     let mut reported = false;
     let (want_rate, forced) = (args.rate, args.force_clock);
 
+    let mut last_stereo = usize::MAX;
+    let mut last_strike = 0usize;
     let mut last_bucket = u32::MAX;
     while !done.load(Ordering::Relaxed) {
         if !reported && started.elapsed() >= Duration::from_millis(1500) {
             reported = true;
             print_hardware(want_rate, forced);
+        }
+        if is_pan {
+            // One line per strike: a little map of where the bell is, from left to right.
+            let p = position.load(Ordering::Relaxed);
+            if p >> 8 != last_strike {
+                last_strike = p >> 8;
+                let pct = p & 0xFF;
+                let slot = (pct * 20 + 50) / 100;
+                let bar: String = (0..=20).map(|i| if i == slot { '●' } else if i == 10 { '|' } else { '-' }).collect();
+                println!("  L {bar} R   ({pct:>3} %)");
+            }
+        }
+        if let Some(labels) = stereo_labels {
+            let p = position.load(Ordering::Relaxed);
+            if p != last_stereo {
+                last_stereo = p;
+                println!("  {}", labels[p.min(labels.len() - 1)]);
+            }
         }
         if let Some(marks) = sweep_marks {
             // Progress of the sweep, every 5 Hz, with a comment at the landmarks.
