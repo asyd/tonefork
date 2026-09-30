@@ -71,18 +71,27 @@ Play straight to the ALSA hardware device (`hw:…`) with a player in exclusive 
 
 ## With `tonegen`
 
+The easy way: let `tonegen` force PipeWire's clock for the duration of the run and put it back afterwards.
+
 ```sh
-# 1. Make the graph run at the target rate
-pw-metadata -n settings 0 clock.force-rate 192000
-
-# 2. Ask for the same rate and check the "Hardware running now" line
-tonegen --rate 192000 --level -40 noise
-
-# 3. Restore
-pw-metadata -n settings 0 clock.force-rate 0
+tonegen --rate 192000 --force-clock --level -40 noise
 ```
 
-`--rate` works with every mode. Without step 1 (or the configuration of method 2), the stream is requested at the rate you give but the hardware stays at 48 kHz, as the report shows.
+What happens, in order: it reads the current `clock.force-rate`, sets it to the requested rate, waits a moment for the graph (and the DAC) to switch, plays, fades out on Ctrl-C, then **restores the previous value**. The "Hardware running now" line tells you whether it worked; if the hardware is still not at the requested rate, `tonegen` says so (another stream is probably pinning PipeWire's clock, see `pw-top`).
+
+Notes:
+
+- `--force-clock` needs `--rate`, and the `pw-metadata` command (part of PipeWire).
+- The previous value is restored when `tonegen` exits normally or with Ctrl-C. If it is killed hard (`kill -9`, power loss of the session), reset it by hand: `pw-metadata -n settings 0 clock.force-rate 0`.
+- Both the change and the restoration change the DAC's clock: expect a short interruption, possibly a click.
+
+Without `--force-clock`, `--rate` only changes the rate of the stream handed to PipeWire; the hardware stays at 48 kHz, as the report shows. The manual equivalent of `--force-clock`:
+
+```sh
+pw-metadata -n settings 0 clock.force-rate 192000   # 1. make the graph run at the target rate
+tonegen --rate 192000 noise                         # 2. ask for the same rate, check the report
+pw-metadata -n settings 0 clock.force-rate 0        # 3. restore
+```
 
 ## Things to know
 

@@ -30,6 +30,8 @@ MODES:
 OPTIONS:
   --device <text>       Output device whose name contains <text> (default: system default)
   --rate <hz>           Request this sample rate for the stream (e.g. 96000, 192000). See docs/sample-rates.md
+  --force-clock         With --rate: set PipeWire's clock to that rate while playing, then restore it
+                        (affects the whole desktop; the DAC may click when the rate changes)
   --host <alsa|pulse>   Audio backend. Default: pulse (PipeWire/PulseAudio) when available, else alsa
   --level <dBFS>        RMS level, default -40, maximum -12
   --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
@@ -49,12 +51,14 @@ struct Args {
     device: Option<String>,
     host: Option<String>,
     rate: Option<u32>,
+    force_clock: bool,
     level_db: f32,
 }
 
 fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
     let (mut device, mut host, mut rate, mut level_db) = (None, None, None, DEFAULT_LEVEL_DB);
+    let mut force_clock = false;
     let (mut secs, mut freqs, mut noise) = (None, None::<Vec<f32>>, false);
     let mut positional = Vec::new();
     while let Some(a) = it.next() {
@@ -65,6 +69,7 @@ fn parse() -> Result<Args> {
             }
             "--device" => device = Some(it.next().ok_or_else(|| anyhow!("--device needs a value"))?),
             "--host" => host = Some(it.next().ok_or_else(|| anyhow!("--host needs a value"))?),
+            "--force-clock" => force_clock = true,
             "--rate" => {
                 let v = it.next().ok_or_else(|| anyhow!("--rate needs a value"))?;
                 let r: u32 = v.parse().context("--rate must be an integer (Hz)")?;
@@ -88,6 +93,9 @@ fn parse() -> Result<Args> {
             "--noise" => noise = true,
             _ => positional.push(a),
         }
+    }
+    if force_clock && rate.is_none() {
+        bail!("--force-clock needs --rate");
     }
     if level_db > MAX_LEVEL_DB {
         bail!("--level {level_db} is above the {MAX_LEVEL_DB} dBFS safety ceiling");
@@ -117,7 +125,7 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
-    Ok(Args { mode, device, host, rate, level_db })
+    Ok(Args { mode, device, host, rate, force_clock, level_db })
 }
 
 fn label(d: &Device) -> String {
@@ -182,6 +190,51 @@ fn pick_config(device: &Device, rate: Option<u32>) -> Result<SupportedStreamConf
             let (lo, hi) = ranges.iter().fold((u32::MAX, 0), |(lo, hi), r| (lo.min(r.min_sample_rate()), hi.max(r.max_sample_rate())));
             anyhow!("this device cannot do {rate} Hz (it reports {lo}..{hi} Hz)")
         })
+}
+
+/// Temporarily forces PipeWire's graph clock (`clock.force-rate`) and restores the previous
+/// value when dropped, so the change never outlives the program (unless it is killed with
+/// SIGKILL; then run `pw-metadata -n settings 0 clock.force-rate 0`).
+struct ClockGuard {
+    previous: String,
+}
+
+/// Extracts the current `clock.force-rate` value from `pw-metadata -n settings` output.
+fn parse_force_rate(output: &str) -> Option<String> {
+    output.lines().find_map(|l| {
+        let rest = l.split("key:'clock.force-rate'").nth(1)?;
+        Some(rest.split("value:'").nth(1)?.split('\'').next()?.to_string())
+    })
+}
+
+fn pw_metadata(args: &[&str]) -> Result<String> {
+    let out = std::process::Command::new("pw-metadata")
+        .args(args)
+        .output()
+        .context("cannot run `pw-metadata` (is PipeWire installed?)")?;
+    if !out.status.success() {
+        bail!("pw-metadata failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+impl ClockGuard {
+    fn force(rate: u32) -> Result<Self> {
+        let previous = parse_force_rate(&pw_metadata(&["-n", "settings"])?).unwrap_or_else(|| "0".into());
+        pw_metadata(&["-n", "settings", "0", "clock.force-rate", &rate.to_string()])?;
+        // Let the graph switch (and the DAC re-lock) before any sound is sent.
+        std::thread::sleep(Duration::from_millis(600));
+        Ok(ClockGuard { previous })
+    }
+}
+
+impl Drop for ClockGuard {
+    fn drop(&mut self) {
+        match pw_metadata(&["-n", "settings", "0", "clock.force-rate", &self.previous]) {
+            Ok(_) => println!("PipeWire clock.force-rate restored to {}.", self.previous),
+            Err(e) => eprintln!("could not restore clock.force-rate ({e}); run: pw-metadata -n settings 0 clock.force-rate {}", self.previous),
+        }
+    }
 }
 
 /// What the ALSA hardware is actually running at right now (Linux `/proc/asound`).
@@ -253,6 +306,11 @@ fn main() -> Result<()> {
 
     let device = find_device(&host, args.device.as_deref())?;
     let supported = pick_config(&device, args.rate)?;
+    // Declared before the stream so that it is dropped (restored) after the stream is gone.
+    let _clock = match (args.force_clock, args.rate) {
+        (true, Some(r)) => Some(ClockGuard::force(r)?),
+        _ => None,
+    };
     let config: StreamConfig = supported.clone().into();
     let sr = config.sample_rate as f32;
 
@@ -290,6 +348,11 @@ fn main() -> Result<()> {
     } else {
         println!("Hardware running now (what the DAC actually receives):");
         hw.iter().for_each(|l| println!("  {l}"));
+        if let Some(r) = args.rate.filter(|_| args.force_clock) {
+            if !hw.iter().any(|l| l.contains(&format!(": {r} Hz"))) {
+                println!("  note: the hardware is not at {r} Hz. Another stream may be pinning PipeWire's clock (see `pw-top`).");
+            }
+        }
     }
     println!();
 
@@ -310,4 +373,16 @@ fn main() -> Result<()> {
         eprintln!("{n} audio error(s) during playback");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_force_rate;
+
+    #[test]
+    fn reads_the_current_force_rate() {
+        let out = "Found \"settings\" metadata 31\nupdate: id:0 key:'clock.rate' value:'48000' type:''\nupdate: id:0 key:'clock.force-rate' value:'192000' type:''\n";
+        assert_eq!(parse_force_rate(out).as_deref(), Some("192000"));
+        assert_eq!(parse_force_rate("update: id:0 key:'clock.rate' value:'48000' type:''"), None);
+    }
 }

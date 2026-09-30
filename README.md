@@ -18,7 +18,7 @@ tonegen steps             # walks through the 10 octave bands, 4 s each, printin
 tonegen steps --noise --freqs 85,250,1000,6500,10000
 ```
 
-Options: `--level <dBFS>` (RMS, default **-40**, hard maximum **-12**), `--secs`, `--freqs`, `--noise`, `--device <text>`, `--host <alsa|pulse>`, `--rate <Hz>`.
+Options: `--level <dBFS>` (RMS, default **-40**, hard maximum **-12**), `--secs`, `--freqs`, `--noise`, `--device <text>`, `--host <alsa|pulse>`, `--rate <Hz>`, `--force-clock`.
 
 ## A listening recipe
 
@@ -45,7 +45,7 @@ Audio errors, if any, are reported once and counted (they can repeat many times 
 
 ## Sample rate
 
-`--rate 192000` asks for a high sample rate, but a PipeWire desktop resamples everything to its own clock (48 kHz by default). `tonegen` prints the rate the hardware is **really** running at, so you can see whether the request went through. How to make it do so: [docs/sample-rates.md](docs/sample-rates.md). The path the audio takes: [docs/audio-path.md](docs/audio-path.md).
+`--rate 192000` asks for a high sample rate, but a PipeWire desktop resamples everything to its own clock (48 kHz by default). Add `--force-clock` to set that clock to the requested rate for the duration of the run (and restore it afterwards). `tonegen` prints the rate the hardware is **really** running at, so you can see whether the request went through. How to make it do so: [docs/sample-rates.md](docs/sample-rates.md). The path the audio takes: [docs/audio-path.md](docs/audio-path.md).
 
 ## Safety
 
