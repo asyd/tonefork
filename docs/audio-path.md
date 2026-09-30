@@ -14,15 +14,18 @@ flowchart TD
     P --> G[PipeWire graph<br/>mix · resample · sink volume]
     G --> S[ALSA sink node<br/>front:4]
     S -->|libasound| K[ALSA core + snd-usb-audio<br/>S32_LE · 2 ch · 48 kHz]
-    K -->|"audio: one way"| U["ONE USB cable<br/>(audio + MIDI)"]
-    U --> D[ADI-2 DAC<br/>volume · EQ · Bass/Treble · filter]
+    K -->|"audio: one way"| U(("ONE physical<br/>USB cable"))
+    K2[snd-usb-audio MIDI<br/>ALSA rawmidi] <-.->|"MIDI: both ways"| U
+    U -->|"audio: one way"| D[ADI-2 DAC<br/>volume · EQ · Bass/Treble · filter]
+    U <-.->|"MIDI: both ways"| M[DAC MIDI / SysEx interface]
+    M <-.->|"set / status"| D
     D --> A[D/A converter + analog stage]
     A -->|"Line out (XLR)"| SUB["Active subwoofer (e.g. ADAM Sub8)<br/>woofer: low-pass 50–150 Hz<br/>satellite out: full range or 85 Hz high-pass"]
     SUB --> WF[Woofer]
     SUB -->|satellite out| SAT[Main speakers]
     A -->|"Phones / IEM out"| HP[Headphones]
 
-    R[rmediy-rs] <-.->|"SysEx over MIDI: both ways"| U
+    R[rmediy-rs<br/>midir] <-.->|"SysEx: both ways"| K2
     T2[tonefork --host alsa] -. "libasound · 'pulse' plugin" .-> P
 ```
 
