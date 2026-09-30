@@ -1,55 +1,84 @@
 # tonegen
 
-A tiny test-signal generator to **hear what your EQ and Bass/Treble settings do**, even without a trained ear.
-Written in Rust (`cpal`), made as a companion to [rmediy-rs](https://github.com/asyd/rmediy-rs).
+A tiny test-signal generator to **hear what your EQ and Bass/Treble settings actually do**, even without a trained ear.
 
-Every mode is scaled to the same **RMS** level, so switching between a sine, a band of noise and pink noise does not change the perceived loudness much. A 1 s fade-in and a fade-out on Ctrl-C avoid clicks.
+It plays steady tones, bands of noise, pink noise and sweeps at a controlled, matched loudness, so you can switch a setting on and off and *hear* the difference. Made as a companion to [rmediy-rs](https://github.com/asyd/rmediy-rs) (a terminal remote control for the RME ADI-2 DAC), but it works with any audio device.
+
+It can also show, and force, the sample rate your hardware really receives: handy to check what a DAC gets through PipeWire (see [Sample rate](#sample-rate)).
+
+## Quick start
+
+```sh
+git clone https://github.com/asyd/tonegen && cd tonegen
+cargo build --release          # binary: target/release/tonegen
+
+tonegen list                   # output devices
+tonegen noise                  # pink noise, -40 dBFS (quiet), Ctrl-C to stop
+```
+
+Start with your DAC / amplifier volume **low**, then raise it.
+
+Requirements: Rust 1.85+, and on Debian/Ubuntu `libasound2-dev` and `pkg-config` to build. Linux with PipeWire or PulseAudio is the tested setup (`--force-clock` also needs the `pw-metadata` command).
 
 ## Modes
 
-```sh
-tonegen list              # output devices
-tonegen noise             # pink noise: best to judge the overall tonal balance
-tonegen band 85           # octave-wide noise band around 85 Hz (the default Bass frequency)
-tonegen band 6500         # ... around 6.5 kHz (the default Treble frequency)
-tonegen tone 1000         # continuous sine
-tonegen sweep --secs 12   # log sweep 20 Hz -> 20 kHz, repeated
-tonegen steps             # walks through the 10 octave bands, 4 s each, printing the frequency
-tonegen steps --noise --freqs 85,250,1000,6500,10000
-```
+| Command | What it plays |
+|---|---|
+| `tonegen noise` | Pink noise. Sounds "flat", so any boost or cut is easy to notice: best for the overall tonal balance. |
+| `tonegen band 85` | An octave-wide band of noise around 85 Hz. Easier to judge than a sine. |
+| `tonegen tone 1000` | A continuous sine. |
+| `tonegen sweep` | A logarithmic sweep from 20 Hz to 20 kHz, repeated. |
+| `tonegen steps` | Walks through the ten octave bands (31.5 Hz to 16 kHz), 4 s each, printing the frequency. |
+| `tonegen list` | Lists the output devices. |
 
-Options: `--level <dBFS>` (RMS, default **-40**, hard maximum **-12**), `--secs`, `--freqs`, `--noise`, `--device <text>`, `--host <alsa|pulse>`, `--rate <Hz>`, `--force-clock`.
+Every mode is scaled to the same **RMS** level, so switching between them does not change the perceived loudness much. Sound fades in over 1 s and fades out on Ctrl-C, so there are no clicks.
+
+## Options
+
+| Option | Meaning |
+|---|---|
+| `--level <dBFS>` | RMS level. Default **-40**, hard maximum **-12**. |
+| `--secs <n>` | Seconds per step (`steps`, default 4) or per sweep (default 12). |
+| `--freqs <a,b,c>` | Frequencies for `steps`, e.g. `--freqs 85,250,1000,6500`. |
+| `--noise` | `steps` with band noise instead of sine tones. |
+| `--device <text>` | Output device whose name contains `<text>`. Default: the session's default sink. |
+| `--host <alsa\|pulse>` | Audio backend. Default: PipeWire/PulseAudio when available, else ALSA. |
+| `--rate <Hz>` | Request a sample rate for the stream. |
+| `--force-clock` | With `--rate`: set PipeWire's clock to that rate while playing, then restore it. |
 
 ## A listening recipe
 
-1. Start with the DAC volume **low**. The default level is deliberately quiet.
-2. Play `tonegen noise` and toggle **EQ Enable** / **B/T Enable** in rmediy-rs: pink noise sounds "flat" and any boost or cut is easy to notice.
-3. To hear one setting precisely, play `tonegen band <freq>` at the frequency you are changing and move only that band's gain: you should hear that band get louder or quieter.
-4. Use `tonegen steps --noise` to walk across the spectrum and hear which regions a setting affects.
+1. Start with the volume low. The default level is deliberately quiet.
+2. Play `tonegen noise` and switch your EQ or Bass/Treble on and off: you should hear the tonal balance change.
+3. To hear one setting precisely, play `tonegen band <freq>` at the frequency you are adjusting and move only that band's gain.
+4. Use `tonegen steps --noise` to walk across the spectrum and find which regions a setting affects.
 
-Why noise bands rather than sines? Low and very high sine tones are hard to hear at low level (our ears are far less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
-
-## Audio backend and device (Linux)
-
-By default `tonegen` talks **directly to PipeWire / PulseAudio** (`--host pulse`), which lists every sink by name, even the one your desktop is already using, and avoids ALSA's `pulse` plugin. Use `--host alsa` to go through ALSA instead (then a device held by the sound server is busy and will not be listed).
-
-```sh
-tonegen list                        # sinks, by name
-tonegen --device ADI noise          # the sink whose name contains "ADI" (e.g. an ADI-2 DAC)
-tonegen --host alsa --device hw:CARD=DAC noise
-```
-
-Without `--device`, the default sink of your session is used. The signal goes through the sound server's volume as well as the DAC's own volume.
-
-Audio errors, if any, are reported once and counted (they can repeat many times per second with some ALSA setups).
+Why noise rather than sines? Low and very high sine tones are hard to hear at low level (the ear is much less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
 
 ## Sample rate
 
-`--rate 192000` asks for a high sample rate, but a PipeWire desktop resamples everything to its own clock (48 kHz by default). Add `--force-clock` to set that clock to the requested rate for the duration of the run (and restore it afterwards). `tonegen` prints the rate the hardware is **really** running at, so you can see whether the request went through. How to make it do so: [docs/sample-rates.md](docs/sample-rates.md). The path the audio takes: [docs/audio-path.md](docs/audio-path.md).
+A PipeWire desktop resamples everything to its own clock (48 kHz by default), whatever an application asks for. `tonegen` prints the rate the hardware is **really** running at, 1.5 s after starting:
+
+```
+Stream : 192000 Hz, 2 ch, f32             <- what tonegen asked for
+Hardware running now (what the DAC actually receives):
+  DAC59920464 (card4): 192000 Hz, S32_LE  <- what reached the DAC
+```
+
+```sh
+tonegen --rate 192000 --force-clock noise
+```
+
+This forces PipeWire's clock for the duration of the run and restores it afterwards. It affects the whole desktop and the DAC may click when the rate changes, so lower the volume first. Details, alternatives and caveats: [docs/sample-rates.md](docs/sample-rates.md).
+
+## Documentation
+
+- [docs/audio-path.md](docs/audio-path.md): the layers between `tonegen` and the speakers (cpal, PipeWire, ALSA, USB, the DAC), with a diagram.
+- [docs/sample-rates.md](docs/sample-rates.md): playing at a high sample rate on Linux, and checking what the DAC receives.
 
 ## Safety
 
-Test signals can be loud and sustained. `--level` refuses anything above -12 dBFS RMS, but the real loudness also depends on the sink volume and on the DAC volume (and on what is connected). Start low.
+Test signals can be loud and sustained. `--level` refuses anything above -12 dBFS RMS, but the real loudness also depends on the sound server's volume, the DAC's volume and what is connected. Start low, and do not use headphones while changing the sample rate.
 
 ## License
 
