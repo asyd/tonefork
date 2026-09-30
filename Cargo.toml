@@ -7,5 +7,5 @@ description = "Test-signal generator (tones, band noise, sweeps, pink noise) to 
 
 [dependencies]
 anyhow = "1.0.104"
-cpal = "0.18.2"
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
 ctrlc = "3.5.2"

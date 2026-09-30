@@ -29,15 +29,19 @@ Options: `--level <dBFS>` (RMS, default **-40**, hard maximum **-12**), `--secs`
 
 Why noise bands rather than sines? Low and very high sine tones are hard to hear at low level (our ears are far less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
 
-## Audio device on Linux (PipeWire / PulseAudio)
+## Audio backend and device (Linux)
 
-If your sound server already uses the DAC (as it usually does), direct ALSA access is busy and the DAC will not show up in `tonegen list`. Play through the sound server instead: the default device follows your default sink. To pick another sink:
+By default `tonegen` talks **directly to PipeWire / PulseAudio** (`--host pulse`), which lists every sink by name, even the one your desktop is already using, and avoids ALSA's `pulse` plugin. Use `--host alsa` to go through ALSA instead (then a device held by the sound server is busy and will not be listed).
 
 ```sh
-PULSE_SINK=<sink name> tonegen --device pulse noise     # names: pactl list short sinks
+tonegen list                        # sinks, by name
+tonegen --device ADI noise          # the sink whose name contains "ADI" (e.g. an ADI-2 DAC)
+tonegen --host alsa --device hw:CARD=DAC noise
 ```
 
-Note that the signal goes through the sound server's volume as well as the DAC's own volume.
+Without `--device`, the default sink of your session is used. The signal goes through the sound server's volume as well as the DAC's own volume.
+
+Audio errors, if any, are reported once and counted (they can repeat many times per second with some ALSA setups).
 
 ## Safety
 

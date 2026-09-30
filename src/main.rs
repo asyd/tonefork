@@ -4,9 +4,9 @@ mod signal;
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Error, FromSample, OutputCallbackInfo, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{Device, Error, FromSample, Host, HostId, OutputCallbackInfo, SampleFormat, SizedSample, Stream, StreamConfig};
 use signal::{Kind, Signal, OCTAVES};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +29,7 @@ MODES:
 
 OPTIONS:
   --device <text>       Output device whose name contains <text> (default: system default)
+  --host <alsa|pulse>   Audio backend. Default: pulse (PipeWire/PulseAudio) when available, else alsa
   --level <dBFS>        RMS level, default -40, maximum -12
   --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
   --freqs <a,b,c>       Frequencies for `steps` (default: the 10 octave bands 31.5 Hz..16 kHz)
@@ -45,12 +46,13 @@ enum Mode {
 struct Args {
     mode: Mode,
     device: Option<String>,
+    host: Option<String>,
     level_db: f32,
 }
 
 fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let (mut device, mut level_db) = (None, DEFAULT_LEVEL_DB);
+    let (mut device, mut host, mut level_db) = (None, None, DEFAULT_LEVEL_DB);
     let (mut secs, mut freqs, mut noise) = (None, None::<Vec<f32>>, false);
     let mut positional = Vec::new();
     while let Some(a) = it.next() {
@@ -60,6 +62,7 @@ fn parse() -> Result<Args> {
                 std::process::exit(0);
             }
             "--device" => device = Some(it.next().ok_or_else(|| anyhow!("--device needs a value"))?),
+            "--host" => host = Some(it.next().ok_or_else(|| anyhow!("--host needs a value"))?),
             "--level" => {
                 let v = it.next().ok_or_else(|| anyhow!("--level needs a value"))?;
                 level_db = v.parse().context("--level must be a number (dBFS)")?;
@@ -104,7 +107,7 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
-    Ok(Args { mode, device, level_db })
+    Ok(Args { mode, device, host, level_db })
 }
 
 fn label(d: &Device) -> String {
@@ -115,8 +118,24 @@ fn label(d: &Device) -> String {
     }
 }
 
-fn find_device(pattern: Option<&str>) -> Result<Device> {
-    let host = cpal::default_host();
+/// PipeWire/PulseAudio directly when possible: it avoids ALSA's `pulse` plugin, which can
+/// report spurious I/O errors, and it lists every sink (even one the sound server holds).
+fn get_host(name: Option<&str>) -> Result<Host> {
+    let available = cpal::available_hosts();
+    let id = match name.map(str::to_lowercase).as_deref() {
+        Some("alsa") => HostId::Alsa,
+        Some("pulse" | "pulseaudio" | "pipewire") => HostId::PulseAudio,
+        Some(other) => bail!("unknown host {other:?} (alsa or pulse)"),
+        None if available.contains(&HostId::PulseAudio) => HostId::PulseAudio,
+        None => HostId::Alsa,
+    };
+    if !available.contains(&id) {
+        bail!("audio backend {} is not available", id.name());
+    }
+    Ok(cpal::host_from_id(id)?)
+}
+
+fn find_device(host: &Host, pattern: Option<&str>) -> Result<Device> {
     let Some(p) = pattern else {
         return host.default_output_device().ok_or_else(|| anyhow!("no default output device"));
     };
@@ -127,7 +146,7 @@ fn find_device(pattern: Option<&str>) -> Result<Device> {
         .ok_or_else(|| anyhow!("no output device matches {p:?} (see `tonegen list`)"))
 }
 
-fn build<T>(device: &Device, config: StreamConfig, mut sig: Signal) -> Result<Stream>
+fn build<T>(device: &Device, config: StreamConfig, mut sig: Signal, errors: Arc<AtomicUsize>) -> Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
 {
@@ -140,7 +159,12 @@ where
                 frame.iter_mut().for_each(|s| *s = v);
             }
         },
-        |e: Error| eprintln!("audio error: {e}"),
+        move |e: Error| {
+            // Report the first error only: they tend to repeat many times per second.
+            if errors.fetch_add(1, Ordering::Relaxed) == 0 {
+                eprintln!("audio error: {e} (further errors are counted, not printed)");
+            }
+        },
         None,
     )?;
     Ok(stream)
@@ -148,15 +172,16 @@ where
 
 fn main() -> Result<()> {
     let args = parse()?;
+    let host = get_host(args.host.as_deref())?;
     let Mode::Play(kind) = args.mode else {
-        let host = cpal::default_host();
+        println!("Backend: {}", host.id().name());
         for d in host.devices()?.filter(|d| d.default_output_config().is_ok()) {
             println!("{}", label(&d));
         }
         return Ok(());
     };
 
-    let device = find_device(args.device.as_deref())?;
+    let device = find_device(&host, args.device.as_deref())?;
     let supported = device.default_output_config()?;
     let config: StreamConfig = supported.clone().into();
     let sr = config.sample_rate as f32;
@@ -169,10 +194,11 @@ fn main() -> Result<()> {
     let sig = Signal::new(kind, sr, args.level_db, stop.clone(), done.clone());
     let position = sig.position.clone();
 
+    let errors = Arc::new(AtomicUsize::new(0));
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => build::<f32>(&device, config, sig)?,
-        SampleFormat::I16 => build::<i16>(&device, config, sig)?,
-        SampleFormat::I32 => build::<i32>(&device, config, sig)?,
+        SampleFormat::F32 => build::<f32>(&device, config, sig, errors.clone())?,
+        SampleFormat::I16 => build::<i16>(&device, config, sig, errors.clone())?,
+        SampleFormat::I32 => build::<i32>(&device, config, sig, errors.clone())?,
         f => bail!("unsupported sample format {f}"),
     };
 
@@ -181,6 +207,7 @@ fn main() -> Result<()> {
         move || stop.store(true, Ordering::Relaxed)
     })?;
 
+    println!("Backend: {}", host.id().name());
     println!("Device : {}", label(&device));
     println!("Level  : {:.0} dBFS RMS (max {MAX_LEVEL_DB:.0}). Start with the DAC volume low!", args.level_db);
     println!("Ctrl-C to stop (fades out).\n");
@@ -198,5 +225,9 @@ fn main() -> Result<()> {
         std::thread::sleep(Duration::from_millis(40));
     }
     std::thread::sleep(Duration::from_millis(150)); // let the last buffer drain
+    let n = errors.load(Ordering::Relaxed);
+    if n > 0 {
+        eprintln!("{n} audio error(s) during playback");
+    }
     Ok(())
 }
