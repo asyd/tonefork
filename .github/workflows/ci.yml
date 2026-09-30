@@ -1,0 +1,47 @@
+name: CI
+
+# Build and test on every push to main (and on pull requests).
+# No release: the binary is kept as a workflow artifact for a few days.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & test (Debian 12, amd64)
+    runs-on: ubuntu-latest
+    # Debian 12 (glibc 2.36): the binary runs on Debian 12+, Ubuntu 22.04+, etc.
+    container: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libasound2-dev pkg-config
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build (release)
+        run: cargo build --release --locked
+
+      - name: Package
+        run: |
+          mkdir dist
+          strip target/release/tonefork
+          cp target/release/tonefork LICENSE README.md dist/
+          tar czf tonefork-linux-amd64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tonefork-linux-amd64
+          path: tonefork-linux-amd64.tar.gz
+          retention-days: 14
+          if-no-files-found: error
