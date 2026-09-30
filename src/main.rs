@@ -4,7 +4,7 @@ mod signal;
 
 use anyhow::{anyhow, bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Error, FromSample, Host, HostId, OutputCallbackInfo, SampleFormat, SizedSample, Stream, StreamConfig};
+use cpal::{Device, Error, FromSample, Host, HostId, SupportedStreamConfig, OutputCallbackInfo, SampleFormat, SizedSample, Stream, StreamConfig};
 use signal::{Kind, Signal, OCTAVES};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -29,6 +29,7 @@ MODES:
 
 OPTIONS:
   --device <text>       Output device whose name contains <text> (default: system default)
+  --rate <hz>           Request this sample rate for the stream (e.g. 96000, 192000). See docs/sample-rates.md
   --host <alsa|pulse>   Audio backend. Default: pulse (PipeWire/PulseAudio) when available, else alsa
   --level <dBFS>        RMS level, default -40, maximum -12
   --secs <n>            Seconds per step (steps, default 4) or per sweep (default 12)
@@ -47,12 +48,13 @@ struct Args {
     mode: Mode,
     device: Option<String>,
     host: Option<String>,
+    rate: Option<u32>,
     level_db: f32,
 }
 
 fn parse() -> Result<Args> {
     let mut it = std::env::args().skip(1);
-    let (mut device, mut host, mut level_db) = (None, None, DEFAULT_LEVEL_DB);
+    let (mut device, mut host, mut rate, mut level_db) = (None, None, None, DEFAULT_LEVEL_DB);
     let (mut secs, mut freqs, mut noise) = (None, None::<Vec<f32>>, false);
     let mut positional = Vec::new();
     while let Some(a) = it.next() {
@@ -63,6 +65,14 @@ fn parse() -> Result<Args> {
             }
             "--device" => device = Some(it.next().ok_or_else(|| anyhow!("--device needs a value"))?),
             "--host" => host = Some(it.next().ok_or_else(|| anyhow!("--host needs a value"))?),
+            "--rate" => {
+                let v = it.next().ok_or_else(|| anyhow!("--rate needs a value"))?;
+                let r: u32 = v.parse().context("--rate must be an integer (Hz)")?;
+                if !(8_000..=1_536_000).contains(&r) {
+                    bail!("--rate must be between 8000 and 1536000 Hz");
+                }
+                rate = Some(r);
+            }
             "--level" => {
                 let v = it.next().ok_or_else(|| anyhow!("--level needs a value"))?;
                 level_db = v.parse().context("--level must be a number (dBFS)")?;
@@ -107,7 +117,7 @@ fn parse() -> Result<Args> {
             std::process::exit(2);
         }
     };
-    Ok(Args { mode, device, host, level_db })
+    Ok(Args { mode, device, host, rate, level_db })
 }
 
 fn label(d: &Device) -> String {
@@ -146,6 +156,66 @@ fn find_device(host: &Host, pattern: Option<&str>) -> Result<Device> {
         .ok_or_else(|| anyhow!("no output device matches {p:?} (see `tonegen list`)"))
 }
 
+/// Picks the output configuration: the device default, or the requested sample rate
+/// (stereo preferred, then f32 > i32 > i16).
+fn pick_config(device: &Device, rate: Option<u32>) -> Result<SupportedStreamConfig> {
+    let Some(rate) = rate else {
+        return Ok(device.default_output_config()?);
+    };
+    let ranges: Vec<_> = device.supported_output_configs()?.collect();
+    let rank = |c: &SupportedStreamConfig| {
+        let fmt = match c.sample_format() {
+            SampleFormat::F32 => 0,
+            SampleFormat::I32 => 1,
+            SampleFormat::I16 => 2,
+            _ => return None,
+        };
+        Some((usize::from(c.channels() != 2), fmt))
+    };
+    ranges
+        .iter()
+        .filter_map(|r| r.clone().try_with_sample_rate(rate))
+        .filter_map(|c| rank(&c).map(|k| (k, c)))
+        .min_by_key(|(k, _)| *k)
+        .map(|(_, c)| c)
+        .ok_or_else(|| {
+            let (lo, hi) = ranges.iter().fold((u32::MAX, 0), |(lo, hi), r| (lo.min(r.min_sample_rate()), hi.max(r.max_sample_rate())));
+            anyhow!("this device cannot do {rate} Hz (it reports {lo}..{hi} Hz)")
+        })
+}
+
+/// What the ALSA hardware is actually running at right now (Linux `/proc/asound`).
+/// This is the real answer: a sound server may resample a stream to its own clock.
+fn hardware_report() -> Vec<String> {
+    let mut lines = Vec::new();
+    let Ok(cards) = std::fs::read_dir("/proc/asound") else { return lines };
+    let mut cards: Vec<_> = cards.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+    cards.sort();
+    for card in cards {
+        let name = card.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        if !name.starts_with("card") || name[4..].parse::<u32>().is_err() {
+            continue;
+        }
+        let id = std::fs::read_to_string(card.join("id")).unwrap_or_default();
+        let Ok(pcms) = std::fs::read_dir(&card) else { continue };
+        let mut pcms: Vec<_> = pcms.filter_map(|e| e.ok()).map(|e| e.path()).collect();
+        pcms.sort();
+        for pcm in pcms {
+            let pn = pcm.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !(pn.starts_with("pcm") && pn.ends_with('p')) {
+                continue;
+            }
+            let Ok(hw) = std::fs::read_to_string(pcm.join("sub0/hw_params")) else { continue };
+            let field = |k: &str| hw.lines().find_map(|l| l.strip_prefix(k)).map(|v| v.trim().to_string());
+            if let (Some(rate), Some(fmt)) = (field("rate:"), field("format:")) {
+                let rate = rate.split_whitespace().next().unwrap_or("?");
+                lines.push(format!("{} ({}): {rate} Hz, {fmt}", id.trim(), name));
+            }
+        }
+    }
+    lines
+}
+
 fn build<T>(device: &Device, config: StreamConfig, mut sig: Signal, errors: Arc<AtomicUsize>) -> Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
@@ -182,7 +252,7 @@ fn main() -> Result<()> {
     };
 
     let device = find_device(&host, args.device.as_deref())?;
-    let supported = device.default_output_config()?;
+    let supported = pick_config(&device, args.rate)?;
     let config: StreamConfig = supported.clone().into();
     let sr = config.sample_rate as f32;
 
@@ -209,9 +279,19 @@ fn main() -> Result<()> {
 
     println!("Backend: {}", host.id().name());
     println!("Device : {}", label(&device));
+    println!("Stream : {} Hz, {} ch, {}", supported.sample_rate(), supported.channels(), supported.sample_format());
     println!("Level  : {:.0} dBFS RMS (max {MAX_LEVEL_DB:.0}). Start with the DAC volume low!", args.level_db);
     println!("Ctrl-C to stop (fades out).\n");
     stream.play()?;
+    std::thread::sleep(Duration::from_millis(1500));
+    let hw = hardware_report();
+    if hw.is_empty() {
+        println!("Hardware: (no running ALSA playback found)");
+    } else {
+        println!("Hardware running now (what the DAC actually receives):");
+        hw.iter().for_each(|l| println!("  {l}"));
+    }
+    println!();
 
     let mut last = usize::MAX;
     while !done.load(Ordering::Relaxed) {
