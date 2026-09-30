@@ -29,10 +29,10 @@ This is the only reliable check: look at the ALSA hardware while something plays
 cat /proc/asound/card4/pcm0p/sub0/hw_params     # the "rate:" line; "closed" when idle
 ```
 
-`tonegen` prints the same thing for you, 1.5 s after starting:
+`tonefork` prints the same thing for you, 1.5 s after starting:
 
 ```
-Stream : 192000 Hz, 2 ch, f32             <- what tonegen asked for
+Stream : 192000 Hz, 2 ch, f32             <- what tonefork asked for
 Hardware running now (what the DAC actually receives):
   DAC59920464 (card4): 48000 Hz, S32_LE   <- what reached the DAC
 ```
@@ -69,27 +69,27 @@ Whether the graph actually switches depends on the application and on other runn
 
 Play straight to the ALSA hardware device (`hw:…`) with a player in exclusive mode. The sound server must not hold the DAC, so you have to stop it or release the sink first. This is the most "pure" path but also the most awkward; it is mostly useful to prove that nothing in the chain touches the signal.
 
-## With `tonegen`
+## With `tonefork`
 
-The easy way: let `tonegen` force PipeWire's clock for the duration of the run and put it back afterwards.
+The easy way: let `tonefork` force PipeWire's clock for the duration of the run and put it back afterwards.
 
 ```sh
-tonegen --rate 192000 --force-clock --level -40 noise
+tonefork --rate 192000 --force-clock --level -40 noise
 ```
 
-What happens, in order: it reads the current `clock.force-rate`, sets it to the requested rate, waits a moment for the graph (and the DAC) to switch, plays, fades out on Ctrl-C, then **restores the previous value**. The "Hardware running now" line tells you whether it worked; if the hardware is still not at the requested rate, `tonegen` says so (another stream is probably pinning PipeWire's clock, see `pw-top`).
+What happens, in order: it reads the current `clock.force-rate`, sets it to the requested rate, waits a moment for the graph (and the DAC) to switch, plays, fades out on Ctrl-C, then **restores the previous value**. The "Hardware running now" line tells you whether it worked; if the hardware is still not at the requested rate, `tonefork` says so (another stream is probably pinning PipeWire's clock, see `pw-top`).
 
 Notes:
 
 - `--force-clock` needs `--rate`, and the `pw-metadata` command (part of PipeWire).
-- The previous value is restored when `tonegen` exits normally or with Ctrl-C. If it is killed hard (`kill -9`, power loss of the session), reset it by hand: `pw-metadata -n settings 0 clock.force-rate 0`.
+- The previous value is restored when `tonefork` exits normally or with Ctrl-C. If it is killed hard (`kill -9`, power loss of the session), reset it by hand: `pw-metadata -n settings 0 clock.force-rate 0`.
 - Both the change and the restoration change the DAC's clock: expect a short interruption, possibly a click.
 
 Without `--force-clock`, `--rate` only changes the rate of the stream handed to PipeWire; the hardware stays at 48 kHz, as the report shows. The manual equivalent of `--force-clock`:
 
 ```sh
 pw-metadata -n settings 0 clock.force-rate 192000   # 1. make the graph run at the target rate
-tonegen --rate 192000 noise                         # 2. ask for the same rate, check the report
+tonefork --rate 192000 noise                         # 2. ask for the same rate, check the report
 pw-metadata -n settings 0 clock.force-rate 0        # 3. restore
 ```
 

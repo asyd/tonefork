@@ -29,11 +29,11 @@
 <path fill="#f3eefc" stroke="#a48bd6" d="M165,-65C165,-65 487,-65 487,-65 493,-65 499,-71 499,-77 499,-77 499,-382.5 499,-382.5 499,-388.5 493,-394.5 487,-394.5 487,-394.5 165,-394.5 165,-394.5 159,-394.5 153,-388.5 153,-382.5 153,-382.5 153,-77 153,-77 153,-71 159,-65 165,-65"/>
 <text xml:space="preserve" text-anchor="middle" x="326" y="-379.1" font-family="Helvetica,sans-Serif" font-size="12.00">RME ADI&#45;2 DAC</text>
 </g>
-<!-- tonegen -->
+<!-- tonefork -->
 <g id="node1" class="node">
-<title>tonegen</title>
+<title>tonefork</title>
 <path fill="#ffffff" stroke="#888888" d="M273,-1106C273,-1106 59,-1106 59,-1106 53,-1106 47,-1100 47,-1094 47,-1094 47,-1082 47,-1082 47,-1076 53,-1070 59,-1070 59,-1070 273,-1070 273,-1070 279,-1070 285,-1076 285,-1082 285,-1082 285,-1094 285,-1094 285,-1100 279,-1106 273,-1106"/>
-<text xml:space="preserve" text-anchor="middle" x="166" y="-1091.05" font-family="Helvetica,sans-Serif" font-size="11.00">tonegen</text>
+<text xml:space="preserve" text-anchor="middle" x="166" y="-1091.05" font-family="Helvetica,sans-Serif" font-size="11.00">tonefork</text>
 <text xml:space="preserve" text-anchor="middle" x="166" y="-1077.55" font-family="Helvetica,sans-Serif" font-size="11.00">(generates samples, f32, &#45;40 dBFS RMS)</text>
 </g>
 <!-- cpal_pulse -->
@@ -43,9 +43,9 @@
 <text xml:space="preserve" text-anchor="middle" x="262" y="-1011.8" font-family="Helvetica,sans-Serif" font-size="11.00">cpal — PulseAudio host</text>
 <text xml:space="preserve" text-anchor="middle" x="262" y="-998.3" font-family="Helvetica,sans-Serif" font-size="11.00">(default: talks the PulseAudio protocol)</text>
 </g>
-<!-- tonegen&#45;&gt;cpal_pulse -->
+<!-- tonefork&#45;&gt;cpal_pulse -->
 <g id="edge1" class="edge">
-<title>tonegen&#45;&gt;cpal_pulse</title>
+<title>tonefork&#45;&gt;cpal_pulse</title>
 <path fill="none" stroke="#555555" d="M187.31,-1069.86C200.39,-1059.33 217.35,-1045.68 231.8,-1034.05"/>
 <polygon fill="#555555" stroke="#555555" points="233.65,-1037.06 239.24,-1028.06 229.26,-1031.6 233.65,-1037.06"/>
 </g>
@@ -56,9 +56,9 @@
 <text xml:space="preserve" text-anchor="middle" x="72" y="-1011.8" font-family="Helvetica,sans-Serif" font-size="11.00">cpal — ALSA host</text>
 <text xml:space="preserve" text-anchor="middle" x="72" y="-998.3" font-family="Helvetica,sans-Serif" font-size="11.00">(&#45;&#45;host alsa)</text>
 </g>
-<!-- tonegen&#45;&gt;cpal_alsa -->
+<!-- tonefork&#45;&gt;cpal_alsa -->
 <g id="edge12" class="edge">
-<title>tonegen&#45;&gt;cpal_alsa</title>
+<title>tonefork&#45;&gt;cpal_alsa</title>
 <path fill="none" stroke="#999999" stroke-dasharray="5,2" d="M145.14,-1069.86C132.45,-1059.43 116.03,-1045.94 101.97,-1034.38"/>
 <polygon fill="#999999" stroke="#999999" points="104.25,-1031.72 94.3,-1028.07 99.8,-1037.13 104.25,-1031.72"/>
 </g>

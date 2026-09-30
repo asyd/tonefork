@@ -1,4 +1,4 @@
-# From `tonegen` to the speakers
+# From `tonefork` to the speakers
 
 What the audio goes through on a typical Linux desktop with an RME ADI-2 DAC (PipeWire, USB).
 Measured values (PipeWire 1.6.8, S32_LE / 48 kHz / period 512) come from one machine and will differ on yours.
@@ -9,7 +9,7 @@ The same thing in a simplified form (rendered natively by GitHub):
 
 ```mermaid
 flowchart TD
-    T[tonegen<br/>f32 samples] --> C[cpal<br/>PulseAudio host]
+    T[tonefork<br/>f32 samples] --> C[cpal<br/>PulseAudio host]
     C -->|PulseAudio protocol| P[pipewire-pulse]
     P --> G[PipeWire graph<br/>mix · resample · sink volume]
     G --> S[ALSA sink node<br/>front:4]
@@ -20,14 +20,14 @@ flowchart TD
     A --> O[Speakers / headphones]
 
     R[rmediy-rs] -. "SysEx over MIDI (same USB cable)" .-> D
-    T2[tonegen --host alsa] -. "libasound · 'pulse' plugin" .-> P
+    T2[tonefork --host alsa] -. "libasound · 'pulse' plugin" .-> P
 ```
 
 ## The layers
 
 | Layer | Role |
 |---|---|
-| **tonegen** | Generates the samples (floating point, scaled to a given RMS level). |
+| **tonefork** | Generates the samples (floating point, scaled to a given RMS level). |
 | **cpal** | Audio I/O library. Its *PulseAudio* host speaks the PulseAudio protocol (no ALSA involved); its *ALSA* host goes through `libasound`. |
 | **pipewire-pulse** | Lets PulseAudio clients talk to PipeWire. |
 | **PipeWire** | The sound server: mixes the streams of all applications, resamples them to the device's rate, applies the **sink volume**. |
@@ -38,8 +38,8 @@ flowchart TD
 
 ## Two paths to keep in mind
 
-- **Default (`--host pulse`)**: `tonegen → cpal → pipewire-pulse → PipeWire → ALSA → USB`.
-- **`--host alsa`**: `tonegen → cpal → libasound`. `libasound` then either goes through its `pulse` plugin to PipeWire (the path where spurious `snd_pcm_avail_delay` I/O errors were seen), or opens the hardware directly (`hw:…`), which only works if nobody else (PipeWire) holds the device.
+- **Default (`--host pulse`)**: `tonefork → cpal → pipewire-pulse → PipeWire → ALSA → USB`.
+- **`--host alsa`**: `tonefork → cpal → libasound`. `libasound` then either goes through its `pulse` plugin to PipeWire (the path where spurious `snd_pcm_avail_delay` I/O errors were seen), or opens the hardware directly (`hw:…`), which only works if nobody else (PipeWire) holds the device.
 
 ## Control is separate from audio
 
@@ -49,7 +49,7 @@ flowchart TD
 
 What you hear is the product of three independent gains:
 
-1. the application's level (`tonegen --level`, `-40 dBFS` by default);
+1. the application's level (`tonefork --level`, `-40 dBFS` by default);
 2. PipeWire's **sink volume** (a software gain, e.g. 60 % ≈ -13 dB on the sink of this machine);
 3. the DAC's own volume (and its EQ, Bass/Treble, loudness...).
 

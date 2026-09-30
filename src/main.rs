@@ -1,4 +1,4 @@
-//! tonegen: test signals to hear what EQ and Bass/Treble settings actually do.
+//! tonefork: test signals to hear what EQ and Bass/Treble settings actually do.
 
 mod signal;
 
@@ -15,9 +15,9 @@ const DEFAULT_LEVEL_DB: f32 = -40.0;
 const MAX_LEVEL_DB: f32 = -12.0;
 
 const USAGE: &str = "\
-tonegen - test signals to hear what EQ and Bass/Treble settings do
+tonefork - test signals to hear what EQ and Bass/Treble settings do
 
-USAGE: tonegen [OPTIONS] <MODE>
+USAGE: tonefork [OPTIONS] <MODE>
 
 MODES:
   list                  List the audio output devices
@@ -101,7 +101,7 @@ fn parse() -> Result<Args> {
         bail!("--level {level_db} is above the {MAX_LEVEL_DB} dBFS safety ceiling");
     }
     let hz = |s: Option<&String>, usage: &str| -> Result<f32> {
-        let f: f32 = s.ok_or_else(|| anyhow!("usage: tonegen {usage}"))?.parse().context("frequency in Hz expected")?;
+        let f: f32 = s.ok_or_else(|| anyhow!("usage: tonefork {usage}"))?.parse().context("frequency in Hz expected")?;
         if !(20.0..=20000.0).contains(&f) {
             bail!("frequency must be between 20 and 20000 Hz");
         }
@@ -161,7 +161,7 @@ fn find_device(host: &Host, pattern: Option<&str>) -> Result<Device> {
     host.devices()?
         .filter(|d| d.default_output_config().is_ok())
         .find(|d| label(d).to_lowercase().contains(&p))
-        .ok_or_else(|| anyhow!("no output device matches {p:?} (see `tonegen list`)"))
+        .ok_or_else(|| anyhow!("no output device matches {p:?} (see `tonefork list`)"))
 }
 
 /// Picks the output configuration: the device default, or the requested sample rate

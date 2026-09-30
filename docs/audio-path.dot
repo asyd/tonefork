@@ -8,7 +8,7 @@ digraph audio_path {
 
   subgraph cluster_app {
     label="Applications (user space)"; style="rounded,filled"; fillcolor="#eaf3ff"; color="#7aa7e0";
-    tonegen [label="tonegen\n(generates samples, f32, -40 dBFS RMS)", fillcolor="#ffffff"];
+    tonefork [label="tonefork\n(generates samples, f32, -40 dBFS RMS)", fillcolor="#ffffff"];
     cpal_pulse [label="cpal — PulseAudio host\n(default: talks the PulseAudio protocol)", fillcolor="#ffffff"];
     cpal_alsa [label="cpal — ALSA host\n(--host alsa)", fillcolor="#ffffff"];
     libasound [label="libasound (ALSA library)\nPCM plugins: default → pulse", fillcolor="#ffffff"];
@@ -42,7 +42,7 @@ digraph audio_path {
   spk [label="Speakers / headphones", shape=box, style="rounded,filled", fillcolor="#dff5df", color="#4c9a4c"];
 
   // Default audio path
-  tonegen -> cpal_pulse;
+  tonefork -> cpal_pulse;
   cpal_pulse -> pwpulse [label="PulseAudio protocol"];
   pwpulse -> graph_;
   graph_ -> sink;
@@ -52,7 +52,7 @@ digraph audio_path {
   usbrx -> dsp -> dac -> analog -> spk;
 
   // Alternative ALSA path
-  tonegen -> cpal_alsa [style=dashed, color="#999999"];
+  tonefork -> cpal_alsa [style=dashed, color="#999999"];
   cpal_alsa -> libasound [style=dashed, color="#999999"];
   libasound -> pwpulse [style=dashed, color="#999999", label="'pulse' plugin\n(where the I/O errors\nwere seen)"];
   libasound -> sndusb [style=dashed, color="#999999", label="hw:… direct\n(only if nobody\nholds the device)"];

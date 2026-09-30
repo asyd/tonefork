@@ -1,4 +1,4 @@
-# tonegen
+# tonefork
 
 A tiny test-signal generator to **hear what your EQ and Bass/Treble settings actually do**, even without a trained ear.
 
@@ -9,11 +9,11 @@ It can also show, and force, the sample rate your hardware really receives: hand
 ## Quick start
 
 ```sh
-git clone https://github.com/asyd/tonegen && cd tonegen
-cargo build --release          # binary: target/release/tonegen
+git clone https://github.com/asyd/tonefork && cd tonefork
+cargo build --release          # binary: target/release/tonefork
 
-tonegen list                   # output devices
-tonegen noise                  # pink noise, -40 dBFS (quiet), Ctrl-C to stop
+tonefork list                   # output devices
+tonefork noise                  # pink noise, -40 dBFS (quiet), Ctrl-C to stop
 ```
 
 Start with your DAC / amplifier volume **low**, then raise it.
@@ -24,12 +24,12 @@ Requirements: Rust 1.85+, and on Debian/Ubuntu `libasound2-dev` and `pkg-config`
 
 | Command | What it plays |
 |---|---|
-| `tonegen noise` | Pink noise. Sounds "flat", so any boost or cut is easy to notice: best for the overall tonal balance. |
-| `tonegen band 85` | An octave-wide band of noise around 85 Hz. Easier to judge than a sine. |
-| `tonegen tone 1000` | A continuous sine. |
-| `tonegen sweep` | A logarithmic sweep from 20 Hz to 20 kHz, repeated. |
-| `tonegen steps` | Walks through the ten octave bands (31.5 Hz to 16 kHz), 4 s each, printing the frequency. |
-| `tonegen list` | Lists the output devices. |
+| `tonefork noise` | Pink noise. Sounds "flat", so any boost or cut is easy to notice: best for the overall tonal balance. |
+| `tonefork band 85` | An octave-wide band of noise around 85 Hz. Easier to judge than a sine. |
+| `tonefork tone 1000` | A continuous sine. |
+| `tonefork sweep` | A logarithmic sweep from 20 Hz to 20 kHz, repeated. |
+| `tonefork steps` | Walks through the ten octave bands (31.5 Hz to 16 kHz), 4 s each, printing the frequency. |
+| `tonefork list` | Lists the output devices. |
 
 Every mode is scaled to the same **RMS** level, so switching between them does not change the perceived loudness much. Sound fades in over 1 s and fades out on Ctrl-C, so there are no clicks.
 
@@ -49,31 +49,31 @@ Every mode is scaled to the same **RMS** level, so switching between them does n
 ## A listening recipe
 
 1. Start with the volume low. The default level is deliberately quiet.
-2. Play `tonegen noise` and switch your EQ or Bass/Treble on and off: you should hear the tonal balance change.
-3. To hear one setting precisely, play `tonegen band <freq>` at the frequency you are adjusting and move only that band's gain.
-4. Use `tonegen steps --noise` to walk across the spectrum and find which regions a setting affects.
+2. Play `tonefork noise` and switch your EQ or Bass/Treble on and off: you should hear the tonal balance change.
+3. To hear one setting precisely, play `tonefork band <freq>` at the frequency you are adjusting and move only that band's gain.
+4. Use `tonefork steps --noise` to walk across the spectrum and find which regions a setting affects.
 
 Why noise rather than sines? Low and very high sine tones are hard to hear at low level (the ear is much less sensitive there), and sines excite room resonances. A band of noise is easier to judge.
 
 ## Sample rate
 
-A PipeWire desktop resamples everything to its own clock (48 kHz by default), whatever an application asks for. `tonegen` prints the rate the hardware is **really** running at, 1.5 s after starting:
+A PipeWire desktop resamples everything to its own clock (48 kHz by default), whatever an application asks for. `tonefork` prints the rate the hardware is **really** running at, 1.5 s after starting:
 
 ```
-Stream : 192000 Hz, 2 ch, f32             <- what tonegen asked for
+Stream : 192000 Hz, 2 ch, f32             <- what tonefork asked for
 Hardware running now (what the DAC actually receives):
   DAC59920464 (card4): 192000 Hz, S32_LE  <- what reached the DAC
 ```
 
 ```sh
-tonegen --rate 192000 --force-clock noise
+tonefork --rate 192000 --force-clock noise
 ```
 
 This forces PipeWire's clock for the duration of the run and restores it afterwards. It affects the whole desktop and the DAC may click when the rate changes, so lower the volume first. Details, alternatives and caveats: [docs/sample-rates.md](docs/sample-rates.md).
 
 ## Documentation
 
-- [docs/audio-path.md](docs/audio-path.md): the layers between `tonegen` and the speakers (cpal, PipeWire, ALSA, USB, the DAC), with a diagram.
+- [docs/audio-path.md](docs/audio-path.md): the layers between `tonefork` and the speakers (cpal, PipeWire, ALSA, USB, the DAC), with a diagram.
 - [docs/sample-rates.md](docs/sample-rates.md): playing at a high sample rate on Linux, and checking what the DAC receives.
 
 ## Safety
